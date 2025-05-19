@@ -1,161 +1,182 @@
+// App.js
 import { Ionicons } from '@expo/vector-icons';
+import { onValue, push, ref, remove, set } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import {
     Alert,
     Button,
     FlatList,
+    Modal,
     SafeAreaView,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
-
-import { onValue, push, ref, remove, set } from 'firebase/database';
 import { db } from './firebaseConfig';
 
 export default function App() {
-  // — Helpers & “today” key —————————————————————————————————
+  // — Helpers & “today” key —
   function getOrdinal(n) {
     const s = ['th','st','nd','rd'], v = n % 100;
     return s[(v - 20) % 10] || s[v] || s[0];
   }
   const today = new Date();
   const yyyy  = today.getFullYear();
-  const mm    = String(today.getMonth() + 1).padStart(2, '0');
-  const dd    = String(today.getDate()).padStart(2, '0');
+  const mm    = String(today.getMonth()+1).padStart(2,'0');
+  const dd    = String(today.getDate()).padStart(2,'0');
   const todayKey = `${yyyy}-${mm}-${dd}`;
 
   const formatKey = key => {
     if (!key) return '';
-    const [y, m, d] = key.split('-').map(Number);
-    const dt        = new Date(y, m - 1, d);
+    const [y,m,d] = key.split('-').map(Number);
+    const dt = new Date(y,m-1,d);
     const dayName   = dt.toLocaleDateString('en-GB',{ weekday:'long' });
     const monthName = dt.toLocaleDateString('en-GB',{ month:'long' });
     return `${dayName}, ${d}${getOrdinal(d)} ${monthName} ${y}`;
   };
 
-  // — State —————————————————————————————————————————————————
-  const [members, setMembers]           = useState([]);
-  const [newName, setNewName]           = useState('');
-  const [presentMap, setPresentMap]     = useState({});
-  const [searchText, setSearchText]     = useState('');
-  const [viewMode, setViewMode]         = useState('attendance');
-  const [dateList, setDateList]         = useState([]);
+  // — State —
+  const [members, setMembers]             = useState([]);
+  const [newName, setNewName]             = useState('');
+  const [presentMap, setPresentMap]       = useState({});
+  const [searchText, setSearchText]       = useState('');
+  const [viewMode, setViewMode]           = useState('attendance');
+  const [dateList, setDateList]           = useState([]);
   const [allAttendance, setAllAttendance] = useState({});
-  const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [selectedDate, setSelectedDate]   = useState(todayKey);
   const [expandedDates, setExpandedDates] = useState([]);
-  const [currentPage, setCurrentPage]   = useState(1);
+  const [currentPage, setCurrentPage]     = useState(1);
   const pageSize = 20;
 
   const [groups, setGroups] = useState({});
   const categories = ['Member','Elder','Deacon','Deaconess'];
 
-  // — Load members ————————————————————————————————————————
+  // for profile modal
+  const [profileMember, setProfileMember] = useState(null);
+
+  // — Load members (including joined) —
   useEffect(() => {
-    const membersRef = ref(db, 'members');
+    const membersRef = ref(db,'members');
     return onValue(membersRef, snap => {
       const data = snap.val() || {};
-      const list = Object.entries(data).map(([id,{name}]) => ({ id, name }));
+      const list = Object.entries(data).map(([id,m]) => ({
+        id,
+        name:     m.name      || '',
+        birthday: m.Birthday  || '',
+        address:  m.Address   || '',
+        phone:    m['Phone Number'] || '',
+        role:     m.Role      || '',
+        age:      m.Age       || '',
+        joined:   m.Joined    || null,      // ← load joined
+      }));
       setMembers(list);
       setPresentMap(pm =>
-        list.reduce((acc, m) => ({ ...acc, [m.id]: pm[m.id] ?? false }), {})
+        list.reduce((acc,m)=>({...acc,[m.id]:pm[m.id]||false}),{})
       );
       setGroups(g =>
-        list.reduce((acc, m) => ({ ...acc, [m.id]: g[m.id] ?? 'Member' }), {})
+        list.reduce((acc,m)=>({...acc,[m.id]:g[m.id]||'Member'}),{})
       );
     });
-  }, []);
+  },[]);
 
-  // — Load attendance history —————————————————————————————
+  // — Load attendance history —
   useEffect(() => {
-    const attRoot = ref(db,'attendance');
-    return onValue(attRoot, snap => {
+    const attRef = ref(db,'attendance');
+    return onValue(attRef, snap => {
       const data = snap.val() || {};
       setAllAttendance(data);
-      const keys = Object.keys(data).sort();
+      let keys = Object.keys(data).sort();
       if (!keys.includes(todayKey)) keys.unshift(todayKey);
       setDateList(keys);
       if (!keys.includes(selectedDate)) setSelectedDate(todayKey);
     });
-  }, []);
+  },[]);
 
-  // — Subscribe to selected date ——————————————————————————
+  // — Subscribe to selected Date —
   useEffect(() => {
-    const attRef = ref(db, `attendance/${selectedDate}`);
+    const attRef = ref(db,`attendance/${selectedDate}`);
     return onValue(attRef, snap => {
       const data = snap.val() || {};
       setPresentMap(pm =>
-        Object.fromEntries(members.map(m => [m.id, Boolean(data[m.id])]))
+        Object.fromEntries(members.map(m=>[m.id,Boolean(data[m.id])]))
       );
     });
-  }, [members, selectedDate]);
+  },[members,selectedDate]);
 
-  // — Counts —————————————————————————————————————
-  const presentCount = members.filter(m => presentMap[m.id]).length;
+  // — Counts —
+  const presentCount = members.filter(m=>presentMap[m.id]).length;
   const absentCount  = members.length - presentCount;
 
-  // — Handlers ————————————————————————————————————————
+  // — Handlers —
   const addMember = async () => {
     const name = newName.trim();
-    if (!name) return Alert.alert('Validation','Please enter a member name.');
-    try { await push(ref(db,'members'),{ name }); setNewName(''); }
-    catch { Alert.alert('Error','Could not add member.'); }
+    if (!name) return Alert.alert('Validation','Enter a member name.');
+    await push(ref(db,'members'),{ 
+      name, 
+      joined: todayKey           // ← stamp joined
+    });
+    setNewName('');
   };
-
   const deleteMember = id => {
     Alert.alert('Confirm','Delete this member?',[
       { text:'Cancel', style:'cancel' },
-      { text:'Delete', style:'destructive', onPress: async () => {
-          try { await remove(ref(db,`members/${id}`)); }
-          catch { Alert.alert('Error','Could not delete.'); }
-        }}
+      { text:'Delete', style:'destructive', onPress:()=>remove(ref(db,`members/${id}`)) }
     ]);
   };
-
   const togglePresent = id => {
-    setPresentMap(pm => ({ ...pm, [id]: !pm[id] }));
+    setPresentMap(pm=>({...pm,[id]:!pm[id]}));
   };
-
-  const markAll = () => {
-    setPresentMap(members.reduce((acc,m)=>({ ...acc, [m.id]: true }),{}));
-  };
-  const clearAll = () => {
-    setPresentMap(members.reduce((acc,m)=>({ ...acc, [m.id]: false }),{}));
-  };
-
+  const markAll = ()=> setPresentMap(members.reduce((acc,m)=>({...acc,[m.id]:true}),{}));
+  const clearAll= ()=> setPresentMap(members.reduce((acc,m)=>({...acc,[m.id]:false}),{}));
   const saveAttendance = async () => {
-    try {
-      await set(ref(db,`attendance/${selectedDate}`),presentMap);
-      Alert.alert('Saved',`Attendance for ${formatKey(selectedDate)} saved.`);
-    } catch {
-      Alert.alert('Error','Could not save attendance.');
+    await set(ref(db,`attendance/${selectedDate}`),presentMap);
+    Alert.alert('Saved',`Attendance for ${formatKey(selectedDate)} saved.`);
+  };
+  const assignGroup = (id,cat)=>setGroups(g=>({...g,[id]:cat}));
+
+  // — Attendance % helper —
+  const getPct = id => {
+    const days = dateList.filter(d=>allAttendance[d]);
+    if (!days.length) return 0;
+    const hits = days.filter(d=>allAttendance[d][id]).length;
+    return Math.round(100*hits/days.length);
+  };
+
+  // — Last-attended helper —
+  const getLastAttendanceDate = id => {
+    // walk dates newest → oldest
+    for (let i=dateList.length-1; i>=0; i--) {
+      const d = dateList[i];
+      if (allAttendance[d]?.[id]) {
+        return d;
+      }
     }
+    return null;
   };
 
-  const assignGroup = (id, category) => {
-    setGroups(g => ({ ...g, [id]: category }));
-  };
-
-  // — Filtering & Pagination ————————————————————————————
-  const filtered = members.filter(m =>
+  // — Filter & paginate —
+  const filtered = members.filter(m=>
     m.name.toLowerCase().includes(searchText.trim().toLowerCase())
   );
-  const totalPages     = Math.max(1, Math.ceil(filtered.length/pageSize));
+  const totalPages     = Math.max(1,Math.ceil(filtered.length/pageSize));
   const displayedItems = filtered.slice(
-    (currentPage-1)*pageSize,
-    currentPage*pageSize
+    (currentPage-1)*pageSize, currentPage*pageSize
   );
 
-  // — Renderers —————————————————————————————————————
-  const renderMember = ({ item }) => {
-    const { id, name } = item;
+  // — Renderers —
+  const renderMember = ({item}) => {
     if (viewMode==='attendance') {
-      const pres = !!presentMap[id];
+      const pres = presentMap[item.id];
       return (
-        <TouchableOpacity style={styles.row} onPress={()=>togglePresent(id)}>
-          <Text style={[styles.member, pres&&styles.presentText]}>{name}</Text>
+        <TouchableOpacity style={styles.row}
+          onPress={()=>togglePresent(item.id)}
+        >
+          <Text style={[styles.member,pres&&styles.presentText]}>
+            {item.name}
+          </Text>
           <Ionicons
             name={pres?'checkmark-circle':'ellipse-outline'}
             size={24} color={pres?'#4CAF50':'#888'}
@@ -166,27 +187,40 @@ export default function App() {
     if (viewMode==='members') {
       return (
         <View style={styles.row}>
-          <Text style={styles.member}>{name}</Text>
-          <Ionicons name="trash" size={24} color="#e33" onPress={()=>deleteMember(id)} />
+          <Text style={styles.member}>{item.name}</Text>
+          <View style={styles.memberActions}>
+            <TouchableOpacity
+              style={styles.viewBtn}
+              onPress={()=>setProfileMember(item)}
+            >
+              <Text style={styles.viewBtnText}>View</Text>
+            </TouchableOpacity>
+            <Ionicons
+              name="trash"
+              size={24}
+              color="#e33"
+              onPress={()=>deleteMember(item.id)}
+            />
+          </View>
         </View>
       );
     }
-    // groups
+    // groups...
     return (
       <View style={styles.row}>
-        <Text style={styles.member}>{name}</Text>
+        <Text style={styles.member}>{item.name}</Text>
         <View style={styles.groupPicker}>
-          {categories.map(cat => (
+          {categories.map(cat=>(
             <TouchableOpacity key={cat}
               style={[
                 styles.groupBtn,
-                groups[id]===cat && styles.groupBtnActive
+                groups[item.id]===cat && styles.groupBtnActive
               ]}
-              onPress={()=>assignGroup(id,cat)}
+              onPress={()=>assignGroup(item.id,cat)}
             >
               <Text style={[
                 styles.groupText,
-                groups[id]===cat && styles.groupTextActive
+                groups[item.id]===cat && styles.groupTextActive
               ]}>
                 {cat}
               </Text>
@@ -197,37 +231,34 @@ export default function App() {
     );
   };
 
-  const renderHistoryItem = ({ item: dateKey }) => {
-    const isExpanded = expandedDates.includes(dateKey);
-    const attendance = allAttendance[dateKey] || {};
+  const renderHistoryItem = ({item:dateKey}) => {
+    const isExp = expandedDates.includes(dateKey);
+    const att   = allAttendance[dateKey]||{};
     return (
       <View style={styles.historyBlock}>
-        <TouchableOpacity
-          style={styles.historyHeader}
-          onPress={() => {
-            setExpandedDates(ed =>
+        <TouchableOpacity style={styles.historyHeader}
+          onPress={()=>{
+            setExpandedDates(ed=>
               ed.includes(dateKey)
                 ? ed.filter(d=>d!==dateKey)
-                : [...ed, dateKey]
+                : [...ed,dateKey]
             );
           }}
         >
           <Text style={styles.historyDate}>
-            {dateKey===todayKey? 'Today' : formatKey(dateKey)}
+            {dateKey===todayKey?'Today':formatKey(dateKey)}
           </Text>
           <Ionicons
-            name={isExpanded?'chevron-up':'chevron-down'}
-            size={20}
-            color="#333"
+            name={isExp?'chevron-up':'chevron-down'}
+            size={20} color="#333"
           />
         </TouchableOpacity>
-        {isExpanded && members.map(m => (
+        {isExp && members.map(m=>(
           <View key={m.id} style={styles.row}>
             <Text style={styles.member}>{m.name}</Text>
             <Ionicons
-              name={attendance[m.id]?'checkmark-circle':'ellipse-outline'}
-              size={20}
-              color={attendance[m.id]?'#4CAF50':'#888'}
+              name={att[m.id]?'checkmark-circle':'ellipse-outline'}
+              size={20} color={att[m.id]?'#4CAF50':'#888'}
             />
           </View>
         ))}
@@ -237,28 +268,25 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* — Segment 2×2 Grid — */}
+      {/* — 2×2 Segment Grid — */}
       <View style={styles.segmentGrid}>
-        {['attendance','members','groups','history'].map(mode => {
-          const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+        {['attendance','members','groups','history'].map(mode=>{
+          const label = mode.charAt(0).toUpperCase()+mode.slice(1);
           return (
-            <TouchableOpacity
-              key={mode}
+            <TouchableOpacity key={mode}
               style={[
                 styles.gridBtn,
-                viewMode===mode && styles.gridBtnActive
+                viewMode===mode&&styles.gridBtnActive
               ]}
               onPress={()=>{
                 setViewMode(mode);
                 setCurrentPage(1);
               }}
             >
-              <Text
-                style={[
-                  styles.gridText,
-                  viewMode===mode && styles.gridTextActive
-                ]}
-              >
+              <Text style={[
+                styles.gridText,
+                viewMode===mode&&styles.gridTextActive
+              ]}>
                 {label}
               </Text>
             </TouchableOpacity>
@@ -266,9 +294,9 @@ export default function App() {
         })}
       </View>
 
+      {/* — Attendance View — */}
       {viewMode==='attendance' && (
         <View style={{flex:1}}>
-          {/* Add */}
           <Text style={styles.heading}>Add a new member</Text>
           <View style={styles.formRow}>
             <TextInput
@@ -280,18 +308,15 @@ export default function App() {
             <Button title="Add" onPress={addMember}/>
           </View>
 
-          {/* Dates */}
           <View style={styles.datePicker}>
             <FlatList
               data={dateList}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.dateListContainer}
+              horizontal showsHorizontalScrollIndicator={false}
               keyExtractor={k=>k}
               renderItem={({item:k})=>(
                 <TouchableOpacity
                   style={[styles.dateBtn, k===selectedDate&&styles.dateBtnActive]}
-                  onPress={()=>{ setSelectedDate(k); setCurrentPage(1); }}
+                  onPress={()=>{setSelectedDate(k);setCurrentPage(1);}}
                 >
                   <Text style={[
                     styles.dateBtnText,
@@ -304,7 +329,6 @@ export default function App() {
             />
           </View>
 
-          {/* Header */}
           <View style={styles.attHeader}>
             <Text style={styles.heading}>
               Attendance for {formatKey(selectedDate)}
@@ -318,12 +342,11 @@ export default function App() {
             </View>
           </View>
 
-          {/* Search + List */}
           <TextInput
             style={styles.search}
             placeholder="Search members..."
             value={searchText}
-            onChangeText={t=>{ setSearchText(t); setCurrentPage(1); }}
+            onChangeText={t=>{setSearchText(t);setCurrentPage(1);}}
           />
           <FlatList
             data={displayedItems}
@@ -331,29 +354,26 @@ export default function App() {
             renderItem={renderMember}
             ListEmptyComponent={<Text style={styles.empty}>No members</Text>}
           />
-          {filtered.length > pageSize && (
+
+          {filtered.length>pageSize && (
             <View style={styles.pagination}>
-              <Button
-                title="Prev"
-                disabled={currentPage<=1}
-                onPress={()=>setCurrentPage(p=>Math.max(1,p-1))}
-              />
+              <Button title="Prev" disabled={currentPage<=1}
+                onPress={()=>setCurrentPage(p=>Math.max(1,p-1))}/>
               <Text style={styles.pageIndicator}>
                 {currentPage} / {totalPages}
               </Text>
-              <Button
-                title="Next"
-                disabled={currentPage>=totalPages}
-                onPress={()=>setCurrentPage(p=>Math.min(totalPages,p+1))}
-              />
+              <Button title="Next" disabled={currentPage>=totalPages}
+                onPress={()=>setCurrentPage(p=>Math.min(totalPages,p+1))}/>
             </View>
           )}
+
           <View style={styles.saveBtn}>
             <Button title="Save Attendance" onPress={saveAttendance}/>
           </View>
         </View>
       )}
 
+      {/* — Members View — */}
       {viewMode==='members' && (
         <View style={{flex:1}}>
           <Text style={styles.heading}>Registered Members</Text>
@@ -372,6 +392,7 @@ export default function App() {
         </View>
       )}
 
+      {/* — Groups View — */}
       {viewMode==='groups' && (
         <View style={{flex:1}}>
           <Text style={styles.heading}>Group Assignments</Text>
@@ -390,6 +411,7 @@ export default function App() {
         </View>
       )}
 
+      {/* — History View — */}
       {viewMode==='history' && (
         <FlatList
           data={dateList}
@@ -398,6 +420,58 @@ export default function App() {
           ListEmptyComponent={<Text style={styles.empty}>No history</Text>}
         />
       )}
+
+      {/* — Profile Modal — */}
+      <Modal
+        visible={!!profileMember}
+        animationType="slide"
+        onRequestClose={()=>setProfileMember(null)}
+      >
+        <SafeAreaView style={styles.container}>
+          <ScrollView contentContainerStyle={{ padding:16 }}>
+            {profileMember && (
+              <>
+                <Text style={[styles.heading,{ textAlign:'left' }]}>
+                  {profileMember.name}
+                </Text>
+                <Text style={styles.profileText}>
+                  Birthday: {profileMember.birthday || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Age: {profileMember.age || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Address: {profileMember.address || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Phone: {profileMember.phone || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Role: {profileMember.role || '–'}
+                </Text>
+                {/* ← Joined line */}
+                <Text style={styles.profileText}>
+                  Joined: {profileMember.joined ? formatKey(profileMember.joined) : '–'}
+                </Text>
+                {/* ← Last attended */}
+                <Text style={styles.profileText}>
+                  Last Attended:{' '}
+                  {(() => {
+                    const d = getLastAttendanceDate(profileMember.id);
+                    return d ? formatKey(d) : 'Never';
+                  })()}
+                </Text>
+                <Text style={[styles.profileText,{ marginTop:12 }]}>
+                  Attendance Rate: {getPct(profileMember.id)}%
+                </Text>
+              </>
+            )}
+            <View style={{ marginTop:20 }}>
+              <Button title="Close" onPress={()=>setProfileMember(null)} />
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -405,7 +479,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container:            { flex:1, backgroundColor:'#f9f9f9' },
 
-  // 2×2 grid styles
+  // 2×2 grid
   segmentGrid:          {
     flexDirection:'row',
     flexWrap:'wrap',
@@ -415,7 +489,8 @@ const styles = StyleSheet.create({
   },
   gridBtn:              {
     width:'48%',
-    margin:'1%',
+    marginHorizontal:'1%',
+    marginBottom:8,
     paddingVertical:12,
     backgroundColor:'#eee',
     borderRadius:6,
@@ -427,12 +502,12 @@ const styles = StyleSheet.create({
 
   heading:              { fontSize:20, fontWeight:'600', marginVertical:8, textAlign:'center' },
   summary:              { textAlign:'center', marginBottom:8, color:'#555' },
+  profileText:          { fontSize:16, marginVertical:4 },
 
   formRow:              { flexDirection:'row', alignItems:'center', marginHorizontal:16, marginBottom:12 },
   input:                { flex:1, borderColor:'#ccc', borderWidth:1, borderRadius:6, padding:10, marginRight:8, backgroundColor:'#fff' },
 
   datePicker:           { marginBottom:12 },
-  dateListContainer:    { flexGrow:1, justifyContent:'center', paddingHorizontal:16 },
   dateBtn:              { paddingVertical:6, paddingHorizontal:12, marginHorizontal:8, borderRadius:6, backgroundColor:'#eee' },
   dateBtnActive:        { backgroundColor:'#4CAF50' },
   dateBtnText:          { color:'#333' },
@@ -445,6 +520,10 @@ const styles = StyleSheet.create({
   row:                  { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:12, marginHorizontal:16, marginVertical:4, backgroundColor:'#fff', borderRadius:6, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:4, elevation:1 },
   member:               { fontSize:16 },
   presentText:          { color:'#4CAF50', fontWeight:'500' },
+
+  memberActions:       { flexDirection:'row', alignItems:'center' },
+  viewBtn:             { backgroundColor:'#4CAF50', paddingHorizontal:12, paddingVertical:6, borderRadius:4, marginRight:8 },
+  viewBtnText:         { color:'#fff', fontWeight:'600' },
 
   groupPicker:          { flexDirection:'row', flexWrap:'wrap', flex:1, justifyContent:'flex-end' },
   groupBtn:             { paddingVertical:4, paddingHorizontal:8, marginHorizontal:4, marginVertical:2, borderRadius:4, backgroundColor:'#eee' },
