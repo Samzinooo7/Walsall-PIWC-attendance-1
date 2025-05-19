@@ -40,6 +40,8 @@ export default function App() {
   // — State —
   const [members, setMembers]             = useState([]);
   const [newName, setNewName]             = useState('');
+  const [editingMember, setEditingMember] = useState(null);
+  const [editFields, setEditFields]       = useState({});
   const [presentMap, setPresentMap]       = useState({});
   const [searchText, setSearchText]       = useState('');
   const [viewMode, setViewMode]           = useState('attendance');
@@ -77,6 +79,7 @@ export default function App() {
         age:      m.Age             || '',
         joined:   m.Joined          || null,
         team:     m.Team            || 'Member',  // ← new Team field
+        gender:   m.gender          || '',
       }));
       setMembers(list);
       setPresentMap(pm =>
@@ -289,6 +292,20 @@ function getPct(id, joined) {
     <View style={styles.row}>
       <Text style={styles.member}>{item.name}</Text>
       <View style={styles.memberActions}>
+        <TouchableOpacity style={styles.editBtn} onPress={()=>{ setEditingMember(item.id); setEditFields({
+              name: item.name,
+              birthday: item.birthday,
+              age: item.age,
+              address: item.address,
+              phone: item.phone,
+              role: item.role,
+              gender: item.gender,
+              team: teams[item.id],
+            });
+          }}
+        >
+          <Text style={styles.editBtnText}>Edit</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.viewBtn} onPress={()=>setProfileMember(item)}>
           <Text style={styles.viewBtnText}>View</Text>
         </TouchableOpacity>
@@ -416,6 +433,21 @@ function getPct(id, joined) {
       </View>
     );
   };
+
+  // Save edits back to Firebase
+    async function saveEdits() {
+      const id = editingMember;
+      await set(ref(db, `members/${id}/name`), editFields.name);
+      await set(ref(db, `members/${id}/Birthday`), editFields.birthday);
+      await set(ref(db, `members/${id}/Age`), editFields.age);
+      await set(ref(db, `members/${id}/Address`), editFields.address);
+      await set(ref(db, `members/${id}/Phone Number`), editFields.phone);
+      await set(ref(db, `members/${id}/Role`), editFields.role);
+      await set(ref(db, `members/${id}/Gender`), editFields.gender);
+      await set(ref(db, `members/${id}/Team`), editFields.team);
+      setEditingMember(null);
+      setEditFields({});
+}
 
   return (
     <SafeAreaView style={styles.container}>
@@ -577,6 +609,7 @@ function getPct(id, joined) {
             {profileMember && (
               <>
                 <Text style={[styles.heading,{textAlign:'left'}]}>{profileMember.name}</Text>
+                <Text style={styles.profileText}>Gender: {profileMember.gender || '–'}</Text>
                 <Text style={styles.profileText}>Birthday: {profileMember.birthday||'–'}</Text>
                 <Text style={styles.profileText}>Age: {profileMember.age||'–'}</Text>
                 <Text style={styles.profileText}>Address: {profileMember.address||'–'}</Text>
@@ -599,6 +632,35 @@ function getPct(id, joined) {
             )}
             <View style={{marginTop:20}}>
               <Button title="Close" onPress={()=>setProfileMember(null)}/>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+      {/* Edit Profile Modal */}
+      <Modal
+        visible={!!editingMember}
+        animationType="slide"
+        onRequestClose={()=>setEditingMember(null)}
+      >
+        <SafeAreaView style={styles.container}>
+          <ScrollView contentContainerStyle={{padding:16}}>
+            <Text style={[styles.heading,{textAlign:'left'}]}>
+              Edit Profile
+            </Text>
+            {['name','birthday','age','address','phone','role','gender','team']
+              .map(field => (
+                <TextInput
+                  key={field}
+                  style={styles.input}
+                  placeholder={field.charAt(0).toUpperCase()+field.slice(1)}
+                  value={editFields[field]}
+                  onChangeText={v=>setEditFields(f=>({...f,[field]:v}))}
+                />
+              ))
+            }
+            <View style={{flexDirection:'row',justifyContent:'space-around',marginTop:20}}>
+              <Button title="Cancel" onPress={()=>setEditingMember(null)} />
+              <Button title="Save"   onPress={saveEdits} />
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -638,6 +700,8 @@ const styles = StyleSheet.create({
   presentText:    {color:'#4CAF50',fontWeight:'500'},
 
   memberActions:  {flexDirection:'row',alignItems:'center'},
+  editBtn:        {backgroundColor:'#ffb300',paddingHorizontal:10,paddingVertical:6,borderRadius:4,marginRight:8},
+  editBtnText:    {color:'#fff',fontWeight:'600'},
   viewBtn:        {backgroundColor:'#4CAF50',paddingHorizontal:12,paddingVertical:6,borderRadius:4,marginRight:8},
   viewBtnText:    {color:'#fff',fontWeight:'600'},
 
