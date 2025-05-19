@@ -1,6 +1,7 @@
 // firebaseConfig.js
-import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getDatabase } from 'firebase/database';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/auth';
+import 'firebase/compat/database';
 
 const firebaseConfig = {
   apiKey:            "AIzaSyCgV7k_N10Tr5uUUTW4hqI9aUrACkAwcNg",
@@ -12,8 +13,11 @@ const firebaseConfig = {
   appId:             "1:996918473207:web:08504fd8e90aec323a3ef2",
 };
 
-const app = getApps().length === 0
-  ? initializeApp(firebaseConfig)
-  : getApp();
+// initialize or reuse
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
 
-export const db = getDatabase(app);
+// now pull out compat instances
+export const auth = firebase.auth();
+export const db   = firebase.database();
