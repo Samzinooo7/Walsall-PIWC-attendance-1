@@ -41,29 +41,24 @@ export default function App() {
   const [newName, setNewName]           = useState('');
   const [presentMap, setPresentMap]     = useState({});
   const [searchText, setSearchText]     = useState('');
-  const [viewMode, setViewMode]         = useState('attendance'); 
-    // 'attendance' | 'members' | 'groups' | 'history'
+  const [viewMode, setViewMode]         = useState('attendance');
   const [dateList, setDateList]         = useState([]);
-  const [allAttendance, setAllAttendance] = useState({}); 
-    // { [dateKey]: { memberId: true } }
+  const [allAttendance, setAllAttendance] = useState({});
   const [selectedDate, setSelectedDate] = useState(todayKey);
-  const [expandedDates, setExpandedDates] = useState([]); 
-    // for history expansion
+  const [expandedDates, setExpandedDates] = useState([]);
   const [currentPage, setCurrentPage]   = useState(1);
   const pageSize = 20;
 
-  // Group assignments: { memberId: categoryName }
   const [groups, setGroups] = useState({});
   const categories = ['Member','Elder','Deacon','Deaconess'];
 
-  // — Load members once ————————————————————————————————————————
+  // — Load members ————————————————————————————————————————
   useEffect(() => {
     const membersRef = ref(db, 'members');
     return onValue(membersRef, snap => {
       const data = snap.val() || {};
       const list = Object.entries(data).map(([id,{name}]) => ({ id, name }));
       setMembers(list);
-      // ensure presentMap & groups have defaults
       setPresentMap(pm =>
         list.reduce((acc, m) => ({ ...acc, [m.id]: pm[m.id] ?? false }), {})
       );
@@ -73,22 +68,20 @@ export default function App() {
     });
   }, []);
 
-  // — Load full attendance history —————————————————————————————
+  // — Load attendance history —————————————————————————————
   useEffect(() => {
     const attRoot = ref(db,'attendance');
     return onValue(attRoot, snap => {
       const data = snap.val() || {};
       setAllAttendance(data);
-      // compute dateList
       const keys = Object.keys(data).sort();
       if (!keys.includes(todayKey)) keys.unshift(todayKey);
       setDateList(keys);
-      // reset selectedDate if missing
       if (!keys.includes(selectedDate)) setSelectedDate(todayKey);
     });
   }, []);
 
-  // — Subscribe to selectedDate for live editing ——————————————————
+  // — Subscribe to selected date ——————————————————————————
   useEffect(() => {
     const attRef = ref(db, `attendance/${selectedDate}`);
     return onValue(attRef, snap => {
@@ -99,20 +92,16 @@ export default function App() {
     });
   }, [members, selectedDate]);
 
-  // — Attendance counts —————————————————————————————————————
+  // — Counts —————————————————————————————————————
   const presentCount = members.filter(m => presentMap[m.id]).length;
   const absentCount  = members.length - presentCount;
 
-  // — CRUD handlers ————————————————————————————————————————
+  // — Handlers ————————————————————————————————————————
   const addMember = async () => {
     const name = newName.trim();
     if (!name) return Alert.alert('Validation','Please enter a member name.');
-    try {
-      await push(ref(db,'members'),{ name });
-      setNewName('');
-    } catch {
-      Alert.alert('Error','Could not add member.');
-    }
+    try { await push(ref(db,'members'),{ name }); setNewName(''); }
+    catch { Alert.alert('Error','Could not add member.'); }
   };
 
   const deleteMember = id => {
@@ -145,22 +134,21 @@ export default function App() {
     }
   };
 
-  // — Group assignment handler —————————————————————————————
   const assignGroup = (id, category) => {
     setGroups(g => ({ ...g, [id]: category }));
   };
 
-  // — Filter & paginate members for list views ——————————————————
+  // — Filtering & Pagination ————————————————————————————
   const filtered = members.filter(m =>
     m.name.toLowerCase().includes(searchText.trim().toLowerCase())
   );
-  const totalPages     = Math.max(1,Math.ceil(filtered.length/pageSize));
+  const totalPages     = Math.max(1, Math.ceil(filtered.length/pageSize));
   const displayedItems = filtered.slice(
     (currentPage-1)*pageSize,
     currentPage*pageSize
   );
 
-  // — Render a member row (attendance vs members vs groups) —————
+  // — Renderers —————————————————————————————————————
   const renderMember = ({ item }) => {
     const { id, name } = item;
     if (viewMode==='attendance') {
@@ -183,7 +171,7 @@ export default function App() {
         </View>
       );
     }
-    // groups view:
+    // groups
     return (
       <View style={styles.row}>
         <Text style={styles.member}>{name}</Text>
@@ -209,7 +197,6 @@ export default function App() {
     );
   };
 
-  // — Render a history item ————————————————————————————————————
   const renderHistoryItem = ({ item: dateKey }) => {
     const isExpanded = expandedDates.includes(dateKey);
     const attendance = allAttendance[dateKey] || {};
@@ -250,32 +237,38 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* — Segment Bar — */}
-      <View style={styles.segment}>
-        {['attendance','members','groups','history'].map(mode => (
-          <TouchableOpacity key={mode}
-            style={[
-              styles.segmentBtn,
-              viewMode===mode && styles.segmentBtnActive
-            ]}
-            onPress={() => {
-              setViewMode(mode);
-              setCurrentPage(1);
-            }}
-          >
-            <Text style={[
-              styles.segmentText,
-              viewMode===mode&&styles.segmentTextActive
-            ]}>
-              {mode.charAt(0).toUpperCase()+mode.slice(1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      {/* — Segment 2×2 Grid — */}
+      <View style={styles.segmentGrid}>
+        {['attendance','members','groups','history'].map(mode => {
+          const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+          return (
+            <TouchableOpacity
+              key={mode}
+              style={[
+                styles.gridBtn,
+                viewMode===mode && styles.gridBtnActive
+              ]}
+              onPress={()=>{
+                setViewMode(mode);
+                setCurrentPage(1);
+              }}
+            >
+              <Text
+                style={[
+                  styles.gridText,
+                  viewMode===mode && styles.gridTextActive
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {viewMode==='attendance' && (
         <View style={{flex:1}}>
-          {/* Add Member */}
+          {/* Add */}
           <Text style={styles.heading}>Add a new member</Text>
           <View style={styles.formRow}>
             <TextInput
@@ -287,7 +280,7 @@ export default function App() {
             <Button title="Add" onPress={addMember}/>
           </View>
 
-          {/* Date Picker */}
+          {/* Dates */}
           <View style={styles.datePicker}>
             <FlatList
               data={dateList}
@@ -311,7 +304,7 @@ export default function App() {
             />
           </View>
 
-          {/* Attendance Header */}
+          {/* Header */}
           <View style={styles.attHeader}>
             <Text style={styles.heading}>
               Attendance for {formatKey(selectedDate)}
@@ -325,7 +318,7 @@ export default function App() {
             </View>
           </View>
 
-          {/* Search & List */}
+          {/* Search + List */}
           <TextInput
             style={styles.search}
             placeholder="Search members..."
@@ -355,8 +348,6 @@ export default function App() {
               />
             </View>
           )}
-
-          {/* Save */}
           <View style={styles.saveBtn}>
             <Button title="Save Attendance" onPress={saveAttendance}/>
           </View>
@@ -413,11 +404,26 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container:            { flex:1, backgroundColor:'#f9f9f9' },
-  segment:              { flexDirection:'row', marginHorizontal:16, marginTop:12, marginBottom:8 },
-  segmentBtn:           { flex:1, padding:12, backgroundColor:'#eee', marginHorizontal:4, borderRadius:6 },
-  segmentBtnActive:     { backgroundColor:'#4CAF50' },
-  segmentText:          { textAlign:'center', color:'#333' },
-  segmentTextActive:    { color:'#fff', fontWeight:'600' },
+
+  // 2×2 grid styles
+  segmentGrid:          {
+    flexDirection:'row',
+    flexWrap:'wrap',
+    marginHorizontal:16,
+    marginTop:12,
+    marginBottom:8,
+  },
+  gridBtn:              {
+    width:'48%',
+    margin:'1%',
+    paddingVertical:12,
+    backgroundColor:'#eee',
+    borderRadius:6,
+    alignItems:'center',
+  },
+  gridBtnActive:        { backgroundColor:'#4CAF50' },
+  gridText:             { color:'#333', fontWeight:'500' },
+  gridTextActive:       { color:'#fff' },
 
   heading:              { fontSize:20, fontWeight:'600', marginVertical:8, textAlign:'center' },
   summary:              { textAlign:'center', marginBottom:8, color:'#555' },
@@ -434,7 +440,6 @@ const styles = StyleSheet.create({
 
   attHeader:            { marginHorizontal:16 },
   shortcutRow:          { flexDirection:'row', justifyContent:'space-around', marginVertical:16 },
-
   search:               { marginHorizontal:16, borderColor:'#ccc', borderWidth:1, borderRadius:6, padding:10, backgroundColor:'#fff', marginBottom:12 },
 
   row:                  { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:12, marginHorizontal:16, marginVertical:4, backgroundColor:'#fff', borderRadius:6, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:4, elevation:1 },
@@ -452,9 +457,7 @@ const styles = StyleSheet.create({
   historyDate:          { fontSize:16, fontWeight:'500' },
 
   empty:                { textAlign:'center', marginTop:20, color:'#666' },
-
   pagination:           { flexDirection:'row', justifyContent:'center', alignItems:'center', margin:16 },
   pageIndicator:        { marginHorizontal:16, fontSize:16 },
-
   saveBtn:              { margin:16 },
 });
