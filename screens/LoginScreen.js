@@ -9,7 +9,6 @@ export default function LoginScreen({ navigation }) {
 
   const onLogin = async () => {
     try {
-      // ← note the method call on auth
       await auth.signInWithEmailAndPassword(email.trim(), pass);
       navigation.replace('Home');
     } catch (e) {

@@ -4,17 +4,17 @@ import 'firebase/compat/auth';
 import 'firebase/compat/database';
 import React, { useEffect, useState } from 'react';
 import {
-    Alert,
-    Button,
-    FlatList,
-    Modal,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Button,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { auth, db } from './firebaseConfig'; // compat versions
 

@@ -9,7 +9,6 @@ export default function RegisterScreen({ navigation }) {
 
   const onRegister = async () => {
     try {
-      // ← method on auth
       await auth.createUserWithEmailAndPassword(email.trim(), pass);
       navigation.replace('Home');
     } catch (e) {
