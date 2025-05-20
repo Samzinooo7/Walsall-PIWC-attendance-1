@@ -709,7 +709,7 @@ useEffect(() => {
 
 const styles = StyleSheet.create({
   container:      {flex:1,backgroundColor:'#f9f9f9'},
-  segmentGrid:    {flexDirection:'row',flexWrap:'wrap',marginHorizontal:16,marginTop:12,marginBottom:8},
+  segmentGrid:    {flexDirection:'row',flexWrap:'wrap',marginHorizontal:16,marginTop:60,marginBottom:8},
   gridBtn:        {width:'48%',marginHorizontal:'1%',marginBottom:8,paddingVertical:12,backgroundColor:'#eee',borderRadius:6,alignItems:'center'},
   gridBtnActive:  {backgroundColor:'#4CAF50'},
   gridText:       {color:'#333',fontWeight:'500'},
