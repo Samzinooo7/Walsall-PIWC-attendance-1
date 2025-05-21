@@ -1,9 +1,28 @@
 // screens/RegisterScreen.js
 
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { equalTo, get, orderByChild, query, ref, set } from 'firebase/database';
+import {
+  createUserWithEmailAndPassword,
+  deleteUser
+} from 'firebase/auth';
+import {
+  equalTo,
+  get,
+  orderByChild,
+  query,
+  ref,
+  set
+} from 'firebase/database';
 import React, { useState } from 'react';
-import { Alert, Button, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  Button,
+  Image,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { auth, db } from '../firebaseConfig';
 
 export default function RegisterScreen({ navigation }) {
@@ -25,47 +44,61 @@ export default function RegisterScreen({ navigation }) {
       return Alert.alert('Validation', 'Email and password are required.');
     }
 
+    let userCred;
     try {
-      // 2) Prevent duplicate church registrations
-      const usersRef = ref(db, 'users');
-      const dupQuery = query(
-        usersRef,
-        orderByChild('church'),
-        equalTo(churchName)
+      // 2) Create & sign-in the new user
+      userCred = await createUserWithEmailAndPassword(auth, emailAddr, password);
+    } catch (e) {
+      return Alert.alert('Registration failed', e.message);
+    }
+
+    const user = userCred.user; // firebase.User
+
+    try {
+      // 3) Check for duplicate church
+      const dupSnap = await get(
+        query(
+          ref(db, 'users'),
+          orderByChild('church'),
+          equalTo(churchName)
+        )
       );
-      const dupSnap = await get(dupQuery);
+
       if (dupSnap.exists()) {
+        // delete just-created user if church already exists
+        await deleteUser(user);
         return Alert.alert(
           'Registration failed',
-          `An account for "${churchName}" already exists.`
+          `An account for “${churchName}” already exists.`
         );
       }
 
-      // 3) Create Firebase Auth user
-      const userCred = await createUserWithEmailAndPassword(
-        auth,
-        emailAddr,
-        password
-      );
-      const uid = userCred.user.uid;
-
-      // 4) Write profile to Realtime Database
-      await set(ref(db, `users/${uid}`), {
+      // 4) No duplicate → write profile
+      await set(ref(db, `users/${user.uid}`), {
         email:     emailAddr,
         church:    churchName,
         createdAt: Date.now(),
       });
 
-      // 5) Navigate into your app
+      // 5) Navigate in
       navigation.replace('Home');
 
     } catch (e) {
+      // cleanup on error
+      await deleteUser(user).catch(() => {});
       Alert.alert('Registration failed', e.message);
     }
   };
 
   return (
     <View style={styles.container}>
+      {/* Logo at top */}
+      <Image
+        source={require('../assets/images/COPUK LOGO - LOCAL_ADD YOUR LOCAL_LOGO1_BLACK COLOUR.png')}
+        style={styles.logo}
+        resizeMode="contain"
+      />
+
       <Text style={styles.title}>Register</Text>
 
       <TextInput
@@ -94,37 +127,49 @@ export default function RegisterScreen({ navigation }) {
 
       <Button title="Sign Up" onPress={onRegister} />
 
-      <Text style={styles.link} onPress={() => navigation.goBack()}>
-        Have an account? Log In
-      </Text>
+      <TouchableOpacity
+        style={styles.loginLink}
+        onPress={() => navigation.goBack()}
+      >
+        <Text style={styles.linkText}>Have an account? Log In</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1, 
+    flex:            1,
     justifyContent: 'center',
-    padding: 16, 
-    backgroundColor: '#f9f9f9'
+    padding:        16,
+    backgroundColor:'#f9f9f9',
+  },
+  logo: {
+    width:  200,    // adjust as needed
+    height: 200,
+    alignSelf: 'center',
+    marginBottom: 24,
   },
   title: {
-    fontSize: 24, 
-    fontWeight: '600',
-    marginBottom: 24, 
-    textAlign: 'center'
+    fontSize:      24,
+    fontWeight:   '600',
+    marginBottom: 24,
+    textAlign:    'center',
   },
   input: {
-    borderWidth: 1, 
+    borderWidth:  1,
     borderColor: '#ccc',
-    borderRadius: 6, 
-    padding: 12,
-    marginBottom: 12, 
-    backgroundColor: '#fff'
+    borderRadius: 6,
+    padding:      12,
+    marginBottom: 12,
+    backgroundColor: '#fff',
   },
-  link: {
-    color: '#4CAF50',
-    marginTop: 16, 
-    textAlign: 'center'
+  loginLink: {
+    marginTop:       16,
+    alignItems:     'center',
+  },
+  linkText: {
+    color:            '#4CAF50',
+    textDecorationLine: 'underline',
   },
 });
