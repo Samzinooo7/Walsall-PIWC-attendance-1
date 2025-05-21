@@ -2,6 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import 'firebase/compat/auth';
 import 'firebase/compat/database';
+import { equalTo, onValue, orderByChild, push, query, ref, set } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
@@ -21,6 +22,7 @@ import { auth, db } from './firebaseConfig'; // compat versions
 export default function MainApp({ navigation }) {
   // — Manage-Account state & handlers —
   const [showManage, setShowManage] = useState(false);
+  const [currentUserChurch, setCurrentUserChurch] = useState(null);
 
   const onResetPassword = async () => {
     try {
@@ -95,220 +97,295 @@ export default function MainApp({ navigation }) {
   const [renamingId, setRenamingId]   = useState(null);
   const [renamedName, setRenamedName] = useState('');
 
-  // — Load members (incl. Team & Email & Gender) —
+// 1) Load the current user’s church once on mount
 useEffect(() => {
-    const membersRef = db.ref('members');
-    const listener = membersRef.on('value', snap => {
-      const data = snap.val() || {};
-      const list = Object.entries(data).map(([id, m]) => ({
-        id,
-        name:     m.name            || '',
-        birthday: m.Birthday        || '',
-        address:  m.Address         || '',
-        phone:    m['Phone Number'] || '',
-        email:    m.Email           || '',
-        role:     m.Role            || '',
-        age:      m.Age             || '',
-        joined:   m.Joined          || null,
-        team:     m.Team            || 'Member',
-        gender:   m.Gender          || '',
-      }));
-      setMembers(list);
-      setPresentMap(pm =>
-        list.reduce((acc, m) => ({ ...acc, [m.id]: pm[m.id] || false }), {})
-      );
-      setTeams(t =>
-        list.reduce((acc, m) => ({ ...acc, [m.id]: m.team }), {})
-      );
-    });
-    return () => membersRef.off('value', listener);
-  }, []);
-  
-  // — Load attendance history —
-  useEffect(() => {
-    const attRef = db.ref('attendance');
-    const listener = attRef.on('value', snap => {
-      const data = snap.val() || {};
-      setAllAttendance(data);
-  
-      let keys = Object.keys(data).sort();
-      if (!keys.includes(todayKey)) keys.unshift(todayKey);
-      setDateList(keys);
-  
-      if (!keys.includes(selectedDate)) {
-        setSelectedDate(todayKey);
-      }
-    });
-    return () => attRef.off('value', listener);
-  }, []);
-  
-  // — Subscribe to selected date —
-  useEffect(() => {
-    const attRef = db.ref(`attendance/${selectedDate}`);
-    const listener = attRef.on('value', snap => {
-      const data = snap.val() || {};
-      setPresentMap(pm =>
-        Object.fromEntries(members.map(m => [m.id, Boolean(data[m.id])]))
-      );
-    });
-    return () => attRef.off('value', listener);
-  }, [members, selectedDate]);
-  
-  // — Load canonical teams list —
-  useEffect(() => {
-    const teamsRef = db.ref('teams');
-    const listener = teamsRef.on('value', snap => {
-      const data = snap.val() || {};
-      setTeamsList(
-        Object.entries(data).map(([id, { name }]) => ({ id, name }))
-      );
-    });
-    return () => teamsRef.off('value', listener);
-  }, []);
+  const uid = auth.currentUser?.uid;
+  if (!uid) return navigation.replace('Login');
+  db.ref(`users/${uid}/church`)
+    .once('value')
+    .then(snap => setCurrentUserChurch(snap.val()))
+    .catch(() => setCurrentUserChurch(null));
+}, []);
 
-  // — Attendance actions & counts —
-  const presentCount = members.filter(m=>presentMap[m.id]).length;
-  const absentCount  = members.length - presentCount;
-  const markAll      = ()=> setPresentMap(members.reduce((acc,m)=>({...acc,[m.id]:true}),{}));
-  const clearAll     = ()=> setPresentMap(members.reduce((acc,m)=>({...acc,[m.id]:false}),{}));
-  const saveAttendance = async () => {
-    await db.ref(`attendance/${selectedDate}`).set(presentMap);
-    Alert.alert('Saved', `Attendance for ${formatKey(selectedDate)} saved.`);
-  };
+  
 
-    // — Member CRUD & toggles —
-    const addMember = async () => {
-        const name = newName.trim();
-        if (!name) {
-          return Alert.alert('Validation', 'Please enter a member name.');
-        }
-        // create the new member node
-        const newRef = db.ref('members').push();
-        await newRef.set({ name, Joined: todayKey, Team: 'Member' });
-        const newId = newRef.key;
-    
-        // immediately mark them present today
-        await db.ref(`attendance/${todayKey}/${newId}`).set(true);
-        setPresentMap(pm => ({ ...pm, [newId]: true }));
-        setNewName('');
-      };
-    
-      const deleteMember = id => {
-        Alert.alert(
-          'Confirm',
-          'Delete this member?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: () => db.ref(`members/${id}`).remove()
-            }
-          ]
-        );
-      };
-    
-      const togglePresent = id =>
-        setPresentMap(pm => ({ ...pm, [id]: !pm[id] }));
-    
-      const assignTeam = (id, teamName) => {
-        db.ref(`members/${id}/Team`).set(teamName);
-        setTeams(prev => ({ ...prev, [id]: teamName }));
-      };
-    
-      // — Teams CRUD handlers —
-      const createTeam = async () => {
-        const name = newTeamName.trim();
-        if (!name) {
-          return Alert.alert('Validation', 'Please enter a team name.');
-        }
-        await db.ref('teams').push({ name });
-        setNewTeamName('');
-      };
-    
-      const deleteTeam = id => {
-        Alert.alert(
-          'Delete team?',
-          'This will unassign all its members.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: async () => {
-                // find team name
-                const teamName = teamsList.find(t => t.id === id)?.name;
-                // reset all members in that team back to "Member"
-                members
-                  .filter(m => teams[m.id] === teamName)
-                  .forEach(m =>
-                    db.ref(`members/${m.id}/Team`).set('Member')
-                  );
-                // remove the team record
-                await db.ref(`teams/${id}`).remove();
-              }
-            }
-          ]
-        );
-      };
-    
-      const startRename = (id, name) => {
-        setRenamingId(id);
-        setRenamedName(name);
-      };
-    
-      const confirmRename = async () => {
-        const newNameTrimmed = renamedName.trim();
-        if (!newNameTrimmed) return;
-        // update the team node
-        await db.ref(`teams/${renamingId}/name`).set(newNameTrimmed);
-        // also update any members who had the old team name
-        const oldName = teamsList.find(t => t.id === renamingId)?.name;
-        members
-          .filter(m => teams[m.id] === oldName)
-          .forEach(m =>
-            db.ref(`members/${m.id}/Team`).set(newNameTrimmed)
-          );
-        setRenamingId(null);
-        setRenamedName('');
-      };
-    
-      const addMemberToTeam = teamName => {
-        const available = members.filter(m => teams[m.id] !== teamName);
-        if (available.length === 0) {
-          return Alert.alert('No one left to add');
-        }
-        Alert.alert(
-          `Add to ${teamName}`,
-          null,
-          available
-            .map(m => ({
-              text: m.name,
-              onPress: () => assignTeam(m.id, teamName)
-            }))
-            .concat({ text: 'Cancel', style: 'cancel' })
-        );
-      };
-    
-      const removeMemberFromTeam = memberId =>
-        assignTeam(memberId, 'Member');
+// 2) Load only members in that church via RTDB query
+useEffect(() => {
+  if (!currentUserChurch) return;
+  const membersQ = query(
+    ref(db, 'members'),
+    orderByChild('church'),
+    equalTo(currentUserChurch)
+  );
+  const unsubscribe = onValue(membersQ, snap => {
+    const data = snap.val() || {};
+    const list = Object.entries(data).map(([id,m])=>({
+      id,
+      name:     m.name            || '',
+      birthday: m.Birthday        || '',
+      address:  m.Address         || '',
+      phone:    m['Phone Number'] || '',
+      email:    m.Email           || '',
+      role:     m.Role            || '',
+      age:      m.Age             || '',
+      joined:   m.Joined          || null,
+      team:     m.Team            || 'Member',
+      gender:   m.Gender          || '',
+    }));
+    setMembers(list);
+    setPresentMap(pm =>
+      list.reduce((acc,m)=>({ ...acc, [m.id]: pm[m.id] || false }), {})
+    );
+    setTeams(t =>
+      list.reduce((acc,m)=>({ ...acc, [m.id]: m.team }), {})
+    );
+  });
+  return unsubscribe;  // detach listener
+}, [currentUserChurch]);
 
-        // — Attendance % & last-attended helpers —  
-  function getPct(id, joined) {
-    const validDates = dateList.filter(d => d >= joined && allAttendance[d]);
-    if (validDates.length === 0) return 100;
-    const hits = validDates.filter(d => Boolean(allAttendance[d][id])).length;
-    return Math.round((hits / validDates.length) * 100);
-  }
 
-  function getLastAttendanceDate(id) {
-    for (let i = dateList.length - 1; i >= 0; i--) {
-      const d = dateList[i];
-      if (allAttendance[d]?.[id]) return d;
+// — Load attendance history —
+useEffect(() => {
+  const attRef = ref(db, 'attendance');
+  const unsubscribe = onValue(attRef, snap => {
+    const data = snap.val() || {};
+    setAllAttendance(data);
+
+    let keys = Object.keys(data).sort();
+    if (!keys.includes(todayKey)) keys.unshift(todayKey);
+    setDateList(keys);
+    if (!keys.includes(selectedDate)) {
+      setSelectedDate(todayKey);
     }
-    return null;
+  });
+  return () => unsubscribe();
+}, [selectedDate]);
+
+// — Subscribe to selected date —
+useEffect(() => {
+  const dayRef = ref(db, `attendance/${selectedDate}`);
+  const unsubscribe = onValue(dayRef, snap => {
+    const data = snap.val() || {};
+    setPresentMap(pm =>
+      Object.fromEntries(members.map(m => [m.id, Boolean(data[m.id])]))
+    );
+  });
+  return () => unsubscribe();
+}, [members, selectedDate]);
+
+// — Load canonical teams list scoped by church —
+useEffect(() => {
+  if (!currentUserChurch) return;
+
+  // Build a Firebase query for teams where .church === currentUserChurch
+  const teamsQuery = query(
+    ref(db, 'teams'),
+    orderByChild('church'),
+    equalTo(currentUserChurch)
+  );
+
+  // Subscribe and map incoming data to [{ id, name }]
+  const unsubscribe = onValue(teamsQuery, snap => {
+    const data = snap.val() || {};
+    const list = Object.entries(data).map(([id, t]) => ({
+      id,
+      name: t.name || ''
+    }));
+    setTeamsList(list);
+  });
+
+  // onValue returns the unsubscribe function
+  return unsubscribe;
+}, [currentUserChurch]);
+
+// — Attendance actions & counts —
+const presentCount = members.filter(m => presentMap[m.id]).length;
+const absentCount  = members.length - presentCount;
+
+const markAll = () =>
+  setPresentMap(members.reduce((acc, m) => ({ ...acc, [m.id]: true }), {}));
+
+const clearAll = () =>
+  setPresentMap(members.reduce((acc, m) => ({ ...acc, [m.id]: false }), {}));
+
+const saveAttendance = async () => {
+  await set(ref(db, `attendance/${selectedDate}`), presentMap);
+  Alert.alert(
+    'Saved',
+    `Attendance for ${formatKey(selectedDate)} saved.`
+  );
+};
+
+// toggles that member’s “present” bit in local state
+const togglePresent = id => {
+  setPresentMap(pm => ({ 
+    ...pm, 
+    [id]: !pm[id] 
+  }));
+};
+
+// 3) Load only teams in that church
+useEffect(() => {
+  if (!currentUserChurch) return;
+  const teamsQ = query(
+    ref(db, 'teams'),
+    orderByChild('church'),
+    equalTo(currentUserChurch)
+  );
+  const unsubscribe = onValue(teamsQ, snap => {
+    const data = snap.val() || {};
+    const list = Object.entries(data).map(([id,t])=>({
+      id,
+      name: t.name || ''
+    }));
+    setTeamsList(list);
+  });
+  return unsubscribe;
+}, [currentUserChurch]);
+
+// — Member CRUD & toggles —  
+const addMember = async () => {
+  const name = newName.trim();
+  if (!name) return Alert.alert('Validation','Please enter a member name.');
+  const newRef = push(ref(db,'members'));
+  await set(newRef, {
+    name,
+    Joined: todayKey,
+    Team: 'Member',
+    church: currentUserChurch   // ← stamp in church
+  });
+  // mark present today
+  await set(ref(db, `attendance/${todayKey}/${newRef.key}`), true);
+  setPresentMap(pm=>({...pm, [newRef.key]: true}));
+  setNewName('');
+};
+
+const deleteMember = id => {
+  Alert.alert(
+    'Confirm',
+    'Delete this member?',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => db.ref(`members/${id}`).remove()
+      }
+    ]
+  );
+};
+
+// — Teams CRUD handlers —  
+const createTeam = async () => {
+  const name = newTeamName.trim();
+  if (!name) return Alert.alert('Validation','Please enter a team name.');
+  const newRef = push(ref(db,'teams'));
+  await set(newRef, {
+    name,
+    church: currentUserChurch   // ← stamp in church
+  });
+  setNewTeamName('');
+};
+
+// re-assigns a member to a different team both locally and in the DB
+const assignTeam = async (id, teamName) => {
+  try {
+    // update in Realtime Database
+    await set(ref(db, `members/${id}/Team`), teamName);
+    // update local UI state immediately
+    setTeams(prev => ({ ...prev, [id]: teamName }));
+  } catch (e) {
+    Alert.alert('Error', e.message);
+  }
+};
+
+
+const deleteTeam = id => {
+  Alert.alert(
+    'Delete team?',
+    'This will unassign all its members.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const teamName = teamsList.find(t => t.id === id)?.name;
+          // reset all members in that team back to "Member"
+          members
+            .filter(m => teams[m.id] === teamName)
+            .forEach(m =>
+              db.ref(`members/${m.id}/Team`).set('Member')
+            );
+          // remove the team record
+          await db.ref(`teams/${id}`).remove();
+        }
+      }
+    ]
+  );
+};
+
+const startRename = (id, name) => {
+  setRenamingId(id);
+  setRenamedName(name);
+};
+
+const confirmRename = async () => {
+  const newNameTrimmed = renamedName.trim();
+  if (!newNameTrimmed) return;
+  // update the team node
+  await db.ref(`teams/${renamingId}/name`).set(newNameTrimmed);
+  // also update any members who had the old team name
+  const oldName = teamsList.find(t => t.id === renamingId)?.name;
+  members
+    .filter(m => teams[m.id] === oldName)
+    .forEach(m =>
+      db.ref(`members/${m.id}/Team`).set(newNameTrimmed)
+    );
+  setRenamingId(null);
+  setRenamedName('');
+};
+
+const addMemberToTeam = teamName => {
+  const available = members.filter(m => teams[m.id] !== teamName);
+  if (available.length === 0) {
+    return Alert.alert('No one left to add');
+  }
+  Alert.alert(
+    `Add to ${teamName}`,
+    null,
+    available
+      .map(m => ({
+        text: m.name,
+        onPress: () => assignTeam(m.id, teamName)
+      }))
+      .concat({ text: 'Cancel', style: 'cancel' })
+  );
+};
+
+const removeMemberFromTeam = memberId =>
+  assignTeam(memberId, 'Member');
+
+// — Attendance % & last-attended helpers —
+function getPct(id, joined) {
+  const validDates = dateList.filter(
+    d => d >= joined && allAttendance[d]
+  );
+  if (validDates.length === 0) return 100;
+  const hits = validDates.filter(
+    d => Boolean(allAttendance[d][id])
+  ).length;
+  return Math.round((hits / validDates.length) * 100);
 }
 
+function getLastAttendanceDate(id) {
+  for (let i = dateList.length - 1; i >= 0; i--) {
+    const d = dateList[i];
+    if (allAttendance[d]?.[id]) return d;
+  }
+  return null;
+}
+ 
   // — Filter & paginate —
   const filteredMembers = members.filter(m=>
     m.name.toLowerCase().includes(searchText.trim().toLowerCase())
