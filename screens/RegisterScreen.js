@@ -1,44 +1,70 @@
 // screens/RegisterScreen.js
 
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { ref, set } from 'firebase/database';
+import {
+  equalTo,
+  get,
+  orderByChild,
+  query,
+  ref,
+  set,
+} from 'firebase/database';
 import React, { useState } from 'react';
 import { Alert, Button, StyleSheet, Text, TextInput, View } from 'react-native';
 import { auth, db } from '../firebaseConfig';
 
 export default function RegisterScreen({ navigation }) {
-  const [church, setChurch] = useState('');  // the “branch” they pick
-  const [email, setEmail]   = useState('');
-  const [pass, setPass]     = useState('');
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const [church, setChurch] = useState('');
+  const [email,  setEmail]  = useState('');
+  const [pass,   setPass]   = useState('');
+  const todayKey = new Date().toISOString().slice(0,10);
 
   const onRegister = async () => {
-    // validations
-    if (!church.trim()) {
+    const churchName = church.trim();
+    const emailAddr  = email.trim();
+
+    // 1) Basic validation
+    if (!churchName) {
       return Alert.alert('Validation', 'Please enter your church.');
     }
-    if (!email.trim() || !pass) {
+    if (!emailAddr || !pass) {
       return Alert.alert('Validation', 'Email and password are required.');
     }
 
     try {
-      // 1) create auth user
+      // 2) Check if this church already has an account
+      const usersRef = ref(db, 'users');
+      const q = query(
+        usersRef,
+        orderByChild('church'),
+        equalTo(churchName)
+      );
+      const snap = await get(q);
+      if (snap.exists()) {
+        return Alert.alert(
+          'Registration failed',
+          `An account for “${churchName}” already exists.`
+        );
+      }
+
+      // 3) Create the Auth user
       const userCred = await createUserWithEmailAndPassword(
         auth,
-        email.trim(),
+        emailAddr,
         pass
       );
       const uid = userCred.user.uid;
 
-      // 2) write into /users only
+      // 4) Write profile under /users
       await set(ref(db, `users/${uid}`), {
-        email:     email.trim(),
-        church:    church.trim(),
-        createdAt: todayKey
+        email:     emailAddr,
+        church:    churchName,
+        createdAt: Date.now(),
       });
 
-      // 3) navigate to Home
+      // 5) Navigate in
       navigation.replace('Home');
+
     } catch (e) {
       Alert.alert('Registration failed', e.message);
     }
