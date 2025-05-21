@@ -2,7 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import 'firebase/compat/auth';
 import 'firebase/compat/database';
-import { equalTo, onValue, orderByChild, push, query, ref, set } from 'firebase/database';
+import { equalTo, onValue, orderByChild, push, query, ref, remove, set } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
@@ -73,6 +73,7 @@ export default function MainApp({ navigation }) {
   // — State —
   const [members, setMembers]             = useState([]);
   const [newName, setNewName]             = useState('');
+  const [teamsMap, setTeamsMap]           = useState({});
   const [editingMember, setEditingMember] = useState(null);
   const [editFields, setEditFields]       = useState({});
   const [presentMap, setPresentMap]       = useState({});
@@ -109,38 +110,63 @@ useEffect(() => {
 
   
 
-// 2) Load only members in that church via RTDB query
+// 2) Load only members in that church via an RTDB query,
+//    and pull in a multi‐team list from m.Teams
 useEffect(() => {
   if (!currentUserChurch) return;
+
   const membersQ = query(
     ref(db, 'members'),
     orderByChild('church'),
     equalTo(currentUserChurch)
   );
-  const unsubscribe = onValue(membersQ, snap => {
-    const data = snap.val() || {};
-    const list = Object.entries(data).map(([id,m])=>({
+
+  // subscribe …
+  const unsubscribe = onValue(membersQ, snapshot => {
+    const data = snapshot.val() || {};
+
+    // map each member node → our UI object
+    const list = Object.entries(data).map(([id, m]) => ({
       id,
-      name:     m.name            || '',
-      birthday: m.Birthday        || '',
-      address:  m.Address         || '',
-      phone:    m['Phone Number'] || '',
-      email:    m.Email           || '',
-      role:     m.Role            || '',
-      age:      m.Age             || '',
-      joined:   m.Joined          || null,
-      team:     m.Team            || 'Member',
-      gender:   m.Gender          || '',
+      name:     m.name             || '',
+      birthday: m.Birthday         || '',
+      address:  m.Address          || '',
+      phone:    m['Phone Number']  || '',
+      email:    m.Email            || '',
+      role:     m.Role             || '',
+      age:      m.Age              || '',
+      joined:   m.Joined           || null,
+      gender:   m.Gender           || '',
+      // collect all team-IDs (keys under m.Teams), or empty array
+      teams: Array.isArray(m.Teams)
+      ? m.Teams
+      : m.Teams
+        ? Object.keys(m.Teams)
+        : []
     }));
-    setMembers(list);
-    setPresentMap(pm =>
-      list.reduce((acc,m)=>({ ...acc, [m.id]: pm[m.id] || false }), {})
-    );
-    setTeams(t =>
-      list.reduce((acc,m)=>({ ...acc, [m.id]: m.team }), {})
-    );
+
+// 2) Update the members list
+setMembers(list);
+
+// 3) Rebuild your present-toggles map
+setPresentMap(prev => {
+  const updated = {};
+  list.forEach(m => {
+    updated[m.id] = prev[m.id] || false;
   });
-  return unsubscribe;  // detach listener
+  return updated;
+});
+
+// 4) Rebuild your multi-team lookup (teamsMap)
+setTeamsMap(
+  list.reduce((acc, m) => {
+    acc[m.id] = m.teams;
+    return acc;
+  }, {})
+);
+});
+
+return unsubscribe;
 }, [currentUserChurch]);
 
 
@@ -184,18 +210,18 @@ useEffect(() => {
     equalTo(currentUserChurch)
   );
 
-  // Subscribe and map incoming data to [{ id, name }]
-  const unsubscribe = onValue(teamsQuery, snap => {
-    const data = snap.val() || {};
-    const list = Object.entries(data).map(([id, t]) => ({
-      id,
-      name: t.name || ''
-    }));
-    setTeamsList(list);
-  });
+// Subscribe and map incoming data to [{ id, name }]
+const unsubscribe = onValue(teamsQuery, snap => {
+  const data = snap.val() || {};
+  const list = Object.entries(data).map(([id, t]) => ({
+    id,
+    name: t.name || ''
+  }));
+  setTeamsList(list);
+});
 
-  // onValue returns the unsubscribe function
-  return unsubscribe;
+// Clean up listener on unmount / church change
+return unsubscribe;
 }, [currentUserChurch]);
 
 // — Attendance actions & counts —
@@ -246,17 +272,33 @@ useEffect(() => {
 // — Member CRUD & toggles —  
 const addMember = async () => {
   const name = newName.trim();
-  if (!name) return Alert.alert('Validation','Please enter a member name.');
-  const newRef = push(ref(db,'members'));
-  await set(newRef, {
+  if (!name) {
+    return Alert.alert('Validation', 'Please enter a member name.');
+  }
+
+  // 1) create the new member node
+  const newRef = push(ref(db, 'members'));
+  const memberData = {
     name,
+    church: currentUserChurch,  // stamp in the current user’s church
     Joined: todayKey,
-    Team: 'Member',
-    church: currentUserChurch   // ← stamp in church
-  });
-  // mark present today
-  await set(ref(db, `attendance/${todayKey}/${newRef.key}`), true);
-  setPresentMap(pm=>({...pm, [newRef.key]: true}));
+    Teams: {},                  // start with an empty teams map
+    // team: 'Member',         // ← optional legacy primary-team field
+  };
+  await set(newRef, memberData);
+
+  // 2) optionally mark them present today
+  await set(
+    ref(db, `attendance/${todayKey}/${newRef.key}`),
+    true
+  );
+
+  // 3) sync local state so UI updates immediately
+  setPresentMap(pm => ({
+    ...pm,
+    [newRef.key]: true
+  }));
+
   setNewName('');
 };
 
@@ -276,95 +318,120 @@ const deleteMember = id => {
 };
 
 // — Teams CRUD handlers —  
+
+// 1) Create a new team under /teams, with a `church` stamp:
 const createTeam = async () => {
   const name = newTeamName.trim();
-  if (!name) return Alert.alert('Validation','Please enter a team name.');
-  const newRef = push(ref(db,'teams'));
+  if (!name) {
+    return Alert.alert('Validation','Please enter a team name.');
+  }
+  // push a new team record
+  const newRef = push(ref(db, 'teams'));
   await set(newRef, {
     name,
-    church: currentUserChurch   // ← stamp in church
+    church: currentUserChurch   // ← record which church owns this team
   });
   setNewTeamName('');
 };
 
-// re-assigns a member to a different team both locally and in the DB
-const assignTeam = async (id, teamName) => {
+// assign adds to Teams map
+const assignTeam = async (memberId, teamId) => {
   try {
-    // update in Realtime Database
-    await set(ref(db, `members/${id}/Team`), teamName);
-    // update local UI state immediately
-    setTeams(prev => ({ ...prev, [id]: teamName }));
+    await set(ref(db, `members/${memberId}/Teams/${teamId}`), true);
+    // update local UI state if needed
   } catch (e) {
     Alert.alert('Error', e.message);
   }
 };
 
 
+
+// remove deletes from Teams map
+const removeMemberFromTeam = async (memberId, teamId) => {
+  try {
+    await remove(ref(db, `members/${memberId}/Teams/${teamId}`));
+    // update local UI state if needed
+  } catch (e) {
+    Alert.alert('Error', e.message);
+  }
+};
+
+// deleteTeam: remove team and remove key from all members
 const deleteTeam = id => {
   Alert.alert(
     'Delete team?',
-    'This will unassign all its members.',
+    'This will remove the team from all members.',
     [
-      { text: 'Cancel', style: 'cancel' },
+      { text:'Cancel', style:'cancel' },
       {
-        text: 'Delete',
-        style: 'destructive',
+        text:'Delete',
+        style:'destructive',
         onPress: async () => {
-          const teamName = teamsList.find(t => t.id === id)?.name;
-          // reset all members in that team back to "Member"
-          members
-            .filter(m => teams[m.id] === teamName)
-            .forEach(m =>
-              db.ref(`members/${m.id}/Team`).set('Member')
-            );
-          // remove the team record
-          await db.ref(`teams/${id}`).remove();
+          // 1) Load team name
+          const snap = await ref(db, `teams/${id}`).once('value');
+          const teamName = snap.val()?.name;
+          // 2) For every member under this church, remove that team key
+          const membersSnap = await ref(db, 'members').once('value');
+          const allMembers = membersSnap.val() || {};
+          for (const [mid,mdata] of Object.entries(allMembers)) {
+            if (mdata.church === currentUserChurch && mdata.Teams?.[id]) {
+              await remove(ref(db, `members/${mid}/Teams/${id}`));
+            }
+          }
+          // 3) Finally remove the team node itself
+          await remove(ref(db, `teams/${id}`));
         }
       }
     ]
   );
 };
 
+// 5) Rename a team (updates only the team’s own node)
 const startRename = (id, name) => {
   setRenamingId(id);
   setRenamedName(name);
 };
-
 const confirmRename = async () => {
   const newNameTrimmed = renamedName.trim();
   if (!newNameTrimmed) return;
-  // update the team node
-  await db.ref(`teams/${renamingId}/name`).set(newNameTrimmed);
-  // also update any members who had the old team name
-  const oldName = teamsList.find(t => t.id === renamingId)?.name;
-  members
-    .filter(m => teams[m.id] === oldName)
-    .forEach(m =>
-      db.ref(`members/${m.id}/Team`).set(newNameTrimmed)
-    );
+  await set(ref(db, `teams/${renamingId}/name`), newNameTrimmed);
   setRenamingId(null);
   setRenamedName('');
 };
 
-const addMemberToTeam = teamName => {
-  const available = members.filter(m => teams[m.id] !== teamName);
+// 6) UI helper to pop a list of members *not yet* in that team:
+const addMemberToTeamPrompt = teamId => {
+  // filter out anyone who already has this teamId in their teamsMap
+  const available = members.filter(
+    m => !(teamsMap[m.id] || []).includes(teamId)
+  );
   if (available.length === 0) {
     return Alert.alert('No one left to add');
   }
+
   Alert.alert(
-    `Add to ${teamName}`,
+    `Add to ${teamsList.find(t => t.id === teamId)?.name}`,
     null,
-    available
-      .map(m => ({
+    [
+      // one button per available member
+      ...available.map(m => ({
         text: m.name,
-        onPress: () => assignTeam(m.id, teamName)
-      }))
-      .concat({ text: 'Cancel', style: 'cancel' })
+        onPress: async () => {
+          // 1) write to RTDB under members/{uid}/Teams/{teamId} = true
+          await set(ref(db, `members/${m.id}/Teams/${teamId}`), true);
+          
+          // 2) update local multi-team lookup
+          setTeamsMap(prev => ({
+            ...prev,
+            [m.id]: [...(prev[m.id] || []), teamId],
+          }));
+        }
+      })),
+      // Cancel button
+      { text: 'Cancel', style: 'cancel' }
+    ]
   );
 };
-
-const removeMemberFromTeam = memberId =>
-  assignTeam(memberId, 'Member');
 
 // — Attendance % & last-attended helpers —
 function getPct(id, joined) {
@@ -398,6 +465,15 @@ function getLastAttendanceDate(id) {
   // — Unique team names & expansion state —
   const uniqueTeams = teamsList.map(t=>t.name);
   const [expandedTeams, setExpandedTeams] = useState([]);
+
+    // helper to toggle a team’s expanded/collapsed state
+    const toggleTeamExpansion = (teamId) => {
+      setExpandedTeams(prev =>
+        prev.includes(teamId)
+          ? prev.filter(id => id !== teamId)
+          : [...prev, teamId]
+      );
+    };
 
   // — Renderers for each view —
   const renderAttendanceMember = ({ item }) => {
@@ -438,51 +514,98 @@ function getLastAttendanceDate(id) {
     </View>
   );
 
-  const renderTeam = ({ item: teamName }) => {
-    const isExp = expandedTeams.includes(teamName);
-    const membersInTeam = members.filter(m=>teams[m.id]===teamName);
-    const teamId = teamsList.find(t=>t.name===teamName)?.id;
+  const renderTeam = ({ item }) => {
+    const { id: teamId, name: teamName } = item;
+    const isExp = expandedTeams.includes(teamId);
+  
+    // find all members whose teamsMap includes this teamId
+    const membersInTeam = members.filter(m =>
+      teamsMap[m.id]?.includes(teamId)
+    );
+  
     return (
       <View style={styles.historyBlock}>
-        <TouchableOpacity style={styles.historyHeader} onPress={()=>{
-          setExpandedTeams(e=>
-            e.includes(teamName) ? e.filter(x=>x!==teamName) : [...e,teamName]
-          );
-        }}>
-          <Text style={styles.historyDate}>{teamName} ({membersInTeam.length})</Text>
-          <View style={{ flexDirection:'row', alignItems:'center' }}>
-            <Ionicons name="add-circle-outline" size={20} color="#4CAF50" style={{ marginRight:12 }} onPress={()=>addMemberToTeam(teamName)} />
-            <Ionicons name="pencil" size={20} color="#888" style={{ marginRight:12 }} onPress={()=>startRename(teamId,teamName)} />
-            <Ionicons name="trash" size={20} color="#e33" style={{ marginRight:12 }} onPress={()=>
-              Alert.alert(
-                `Delete team "${teamName}"?`,
-                'This will unassign all its members. Continue?',
-                [
-                  { text:'Cancel', style:'cancel' },
-                  { text:'Delete', style:'destructive', onPress:()=>deleteTeam(teamId) }
-                ]
-              )
-            }/>
-            <Ionicons name={isExp?'chevron-up':'chevron-down'} size={20} color="#333" />
+        <TouchableOpacity
+          style={styles.historyHeader}
+          onPress={() =>
+            setExpandedTeams(e =>
+              e.includes(teamId)
+                ? e.filter(x => x !== teamId)
+                : [...e, teamId]
+            )
+          }
+        >
+          <Text style={styles.historyDate}>
+            {teamName} ({membersInTeam.length})
+          </Text>
+  
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Ionicons
+              name="add-circle-outline"
+              size={20}
+              color="#4CAF50"
+              style={{ marginRight: 12 }}
+              onPress={() => addMemberToTeamPrompt(teamId)}
+            />
+            <Ionicons
+              name="pencil"
+              size={20}
+              color="#888"
+              style={{ marginRight: 12 }}
+              onPress={() => startRename(teamId, teamName)}
+            />
+            <Ionicons
+              name="trash"
+              size={20}
+              color="#e33"
+              style={{ marginRight: 12 }}
+              onPress={() =>
+                Alert.alert(
+                  `Delete team "${teamName}"?`,
+                  'This will unassign all its members. Continue?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Delete',
+                      style: 'destructive',
+                      onPress: () => deleteTeam(teamId),
+                    },
+                  ]
+                )
+              }
+            />
+            <Ionicons
+              name={isExp ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color="#333"
+            />
           </View>
         </TouchableOpacity>
-        {isExp && membersInTeam.map(m=>(
-          <View key={m.id} style={styles.row}>
-            <Text style={styles.member}>{m.name}</Text>
-            <TouchableOpacity onPress={()=>
-              Alert.alert(
-                `Remove ${m.name} from "${teamName}"?`,
-                null,
-                [
-                  { text:'Cancel', style:'cancel' },
-                  { text:'Remove', style:'destructive', onPress:()=>removeMemberFromTeam(m.id) }
-                ]
-              )
-            }>
-              <Text style={{ color:'#e33', fontWeight:'500' }}>Remove</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
+  
+        {isExp &&
+          membersInTeam.map(m => (
+            <View key={m.id} style={styles.row}>
+              <Text style={styles.member}>{m.name}</Text>
+              <TouchableOpacity
+                onPress={() =>
+                  Alert.alert(
+                    `Remove ${m.name} from "${teamName}"?`,
+                    '',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Remove',
+                        style: 'destructive',
+                        onPress: () => removeMemberFromTeam(m.id),
+                      },
+                    ]
+                  )
+                }
+              >
+                <Text style={styles.removeText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
       </View>
     );
   };
@@ -705,11 +828,65 @@ function getLastAttendanceDate(id) {
           </Modal>
 
           <FlatList
-            data={uniqueTeams}
-            keyExtractor={t=>t}
-            renderItem={renderTeam}
-            ListEmptyComponent={<Text style={styles.empty}>No teams</Text>}
+  data={teamsList}                              // <-- use the array of {id,name}
+  keyExtractor={item => item.id}                // <-- stable unique key
+  renderItem={({ item }) => (
+    <View style={styles.historyBlock}>
+      <TouchableOpacity
+        style={styles.historyHeader}
+        onPress={() => toggleTeamExpansion(item.id)}
+      >
+        <Text style={styles.historyDate}>
+          {item.name} ({members.filter(m => teamsMap[m.id]?.includes(item.id)).length})
+        </Text>
+        <View style={{ flexDirection:'row', alignItems:'center' }}>
+          <Ionicons
+            name="add-circle-outline"
+            size={20}
+            color="#4CAF50"
+            onPress={() => addMemberToTeamPrompt(item.id)}
+            style={{ marginRight: 12 }}
           />
+          <Ionicons
+            name="pencil"
+            size={20}
+            color="#888"
+            onPress={() => startRename(item.id, item.name)}
+            style={{ marginRight: 12 }}
+          />
+          <Ionicons
+            name="trash"
+            size={20}
+            color="#e33"
+            onPress={() => deleteTeam(item.id)}
+            style={{ marginRight: 12 }}
+          />
+          <Ionicons
+            name={expandedTeams.includes(item.id) ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color="#333"
+          />
+        </View>
+      </TouchableOpacity>
+
+      {expandedTeams.includes(item.id) && (
+        members
+          .filter(m => teamsMap[m.id]?.includes(item.id))
+          .map(m => (
+            <View key={m.id} style={styles.row}>
+              <Text style={styles.member}>{m.name}</Text>
+              <TouchableOpacity
+                onPress={() => removeMemberFromTeam(m.id, item.id)}
+              >
+                <Text style={{ color:'#e33', fontWeight:'500' }}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          ))
+      )}
+    </View>
+  )}
+  ListEmptyComponent={<Text style={styles.empty}>No teams</Text>}
+/>
         </View>
       )}
 
@@ -723,47 +900,89 @@ function getLastAttendanceDate(id) {
         />
       )}
 
-      {/* Profile Modal */}
-      <Modal visible={!!profileMember} animationType="slide" onRequestClose={()=>setProfileMember(null)}>
-        <SafeAreaView style={styles.container}>
-          <ScrollView contentContainerStyle={{padding:16}}>
-            {profileMember && (
-              <>
-                <Text style={[styles.heading,{textAlign:'left'}]}>{profileMember.name}</Text>
-                <Text style={styles.profileText}>Gender: {profileMember.gender || '–'}</Text>
-                <Text style={styles.profileText}>Birthday: {profileMember.birthday||'–'}</Text>
-                <Text style={styles.profileText}>Age: {profileMember.age||'–'}</Text>
-                <Text style={styles.profileText}>Address: {profileMember.address||'–'}</Text>
-                <Text style={styles.profileText}>Phone: {profileMember.phone||'–'}</Text>
-                <Text style={styles.profileText}>Email: {profileMember.email||'–'}</Text>
-                <Text style={styles.profileText}>Role: {profileMember.role||'–'}</Text>
-                <Text style={styles.profileText}>Joined: {profileMember.joined?formatKey(profileMember.joined):'–'}</Text>
-                <Text style={styles.profileText}>Team: {teams[profileMember.id]||'–'}</Text>
-                <Text style={styles.profileText}>
-                  Last Attended: {
-                    (() => {
-                      const d = getLastAttendanceDate(profileMember.id);
-                      return d ? formatKey(d) : 'Never';
-                    })()
-                  }
-                </Text>
-                <Text style={[styles.profileText,{marginTop:12}]}>
-                  Attendance Rate: {getPct(profileMember.id, profileMember.joined)}%
-                </Text>
-              </>
-            )}
-            <View style={{marginTop:20}}>
-              <Button title="Close" onPress={()=>setProfileMember(null)}/>
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
+{/* Profile Modal */}
+<Modal
+  visible={!!profileMember}
+  animationType="slide"
+  onRequestClose={() => setProfileMember(null)}
+>
+  <SafeAreaView style={styles.container}>
+    <ScrollView contentContainerStyle={{ padding: 16 }}>
+      {profileMember && (
+        <>
+          <Text style={[styles.heading, { textAlign: 'left' }]}>
+            {profileMember.name}
+          </Text>
+          <Text style={styles.profileText}>
+            Gender: {profileMember.gender || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Birthday: {profileMember.birthday || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Age: {profileMember.age || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Address: {profileMember.address || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Phone: {profileMember.phone || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Email: {profileMember.email || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Role: {profileMember.role || '–'}
+          </Text>
+          <Text style={styles.profileText}>
+            Joined:{' '}
+            {profileMember.joined
+              ? formatKey(profileMember.joined)
+              : '–'}
+          </Text>
+
+          {/* ← NEW: Multi-team display */}
+          <Text style={styles.profileText}>
+  Teams:{' '}
+  {teamsMap[profileMember.id]?.length
+    ? Array.from(new Set(teamsMap[profileMember.id]))
+        .map(teamId => {
+          const team = teamsList.find(t => t.id === teamId)
+          return team ? team.name : '(unknown)'
+        })
+        .join(', ')
+    : '–'}
+</Text>
+
+          <Text style={styles.profileText}>
+            Last Attended:{' '}
+            {(() => {
+              const d = getLastAttendanceDate(profileMember.id)
+              return d ? formatKey(d) : 'Never'
+            })()}
+          </Text>
+          <Text style={[styles.profileText, { marginTop: 12 }]}>
+            Attendance Rate:{' '}
+            {getPct(profileMember.id, profileMember.joined)}%
+          </Text>
+        </>
+      )}
+      <View style={{ marginTop: 20 }}>
+        <Button
+          title="Close"
+          onPress={() => setProfileMember(null)}
+        />
+      </View>
+    </ScrollView>
+  </SafeAreaView>
+</Modal>
 
       {/* Edit Profile Modal */}
       <Modal visible={!!editingMember} animationType="slide" onRequestClose={()=>setEditingMember(null)}>
         <SafeAreaView style={styles.container}>
           <ScrollView contentContainerStyle={{padding:16}}>
-            <Text style={[styles.heading,{textAlign:'left'}]}>Edit Profile</Text>
+            {/* <Text style={[styles.heading,{textAlign:'left'}]}>Edit Profile</Text> */}
+            <Text> Teams: {profileMember?.teams?.length? profileMember.teams.join(', '): 'None'} </Text>
             {['name','birthday','age','address','phone','email','role','gender','team'].map(field=>(
               <TextInput
                 key={field}
@@ -859,5 +1078,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 16,
     textAlign: 'center',
+  },
+
+  removeText: {
+    color: '#e33',
+    fontWeight: '500',
   },
 });

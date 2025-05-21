@@ -1,14 +1,7 @@
 // screens/RegisterScreen.js
 
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import {
-  equalTo,
-  get,
-  orderByChild,
-  query,
-  ref,
-  set,
-} from 'firebase/database';
+import { equalTo, get, orderByChild, query, ref, set } from 'firebase/database';
 import React, { useState } from 'react';
 import { Alert, Button, StyleSheet, Text, TextInput, View } from 'react-native';
 import { auth, db } from '../firebaseConfig';
@@ -17,52 +10,53 @@ export default function RegisterScreen({ navigation }) {
   const [church, setChurch] = useState('');
   const [email,  setEmail]  = useState('');
   const [pass,   setPass]   = useState('');
-  const todayKey = new Date().toISOString().slice(0,10);
+  const todayKey = new Date().toISOString().slice(0, 10);
 
   const onRegister = async () => {
     const churchName = church.trim();
     const emailAddr  = email.trim();
+    const password   = pass;
 
-    // 1) Basic validation
+    // 1) Validate inputs
     if (!churchName) {
       return Alert.alert('Validation', 'Please enter your church.');
     }
-    if (!emailAddr || !pass) {
+    if (!emailAddr || !password) {
       return Alert.alert('Validation', 'Email and password are required.');
     }
 
     try {
-      // 2) Check if this church already has an account
+      // 2) Prevent duplicate church registrations
       const usersRef = ref(db, 'users');
-      const q = query(
+      const dupQuery = query(
         usersRef,
         orderByChild('church'),
         equalTo(churchName)
       );
-      const snap = await get(q);
-      if (snap.exists()) {
+      const dupSnap = await get(dupQuery);
+      if (dupSnap.exists()) {
         return Alert.alert(
           'Registration failed',
-          `An account for “${churchName}” already exists.`
+          `An account for "${churchName}" already exists.`
         );
       }
 
-      // 3) Create the Auth user
+      // 3) Create Firebase Auth user
       const userCred = await createUserWithEmailAndPassword(
         auth,
         emailAddr,
-        pass
+        password
       );
       const uid = userCred.user.uid;
 
-      // 4) Write profile under /users
+      // 4) Write profile to Realtime Database
       await set(ref(db, `users/${uid}`), {
         email:     emailAddr,
         church:    churchName,
         createdAt: Date.now(),
       });
 
-      // 5) Navigate in
+      // 5) Navigate into your app
       navigation.replace('Home');
 
     } catch (e) {
