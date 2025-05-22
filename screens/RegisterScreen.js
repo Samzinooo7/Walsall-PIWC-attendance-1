@@ -23,12 +23,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import PasswordInput from '../components/PasswordInput';
 import { auth, db } from '../firebaseConfig';
 
 export default function RegisterScreen({ navigation }) {
   const [church, setChurch] = useState('');
   const [email,  setEmail]  = useState('');
-  const [pass,   setPass]   = useState('');
+  const [pass,   setPass]         = useState('');
+  const [confirm, setConfirm]     = useState('');
   const todayKey = new Date().toISOString().slice(0, 10);
 
   const onRegister = async () => {
@@ -42,6 +44,10 @@ export default function RegisterScreen({ navigation }) {
     }
     if (!emailAddr || !password) {
       return Alert.alert('Validation', 'Email and password are required.');
+    }
+
+    if (pass !== confirm) {
+      return Alert.alert('Validation','Passwords do not match.');
     }
 
     let userCred;
@@ -117,13 +123,17 @@ export default function RegisterScreen({ navigation }) {
         onChangeText={setEmail}
       />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        secureTextEntry
-        value={pass}
-        onChangeText={setPass}
-      />
+     <PasswordInput
+       placeholder="Password"
+       value={pass}
+       onChangeText={setPass}
+     />
+
+     <PasswordInput
+       placeholder="Confirm Password"
+       value={confirm}
+       onChangeText={setConfirm}
+     />
 
       <Button title="Sign Up" onPress={onRegister} />
 

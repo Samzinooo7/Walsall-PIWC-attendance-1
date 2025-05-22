@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import PasswordInput from '../components/PasswordInput';
 import { auth } from '../firebaseConfig';
 
 export default function LoginScreen({ navigation }) {
@@ -66,14 +67,12 @@ export default function LoginScreen({ navigation }) {
         value={email}
         onChangeText={setEmail}
       />
-
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        secureTextEntry
-        value={pass}
-        onChangeText={setPass}
-      />
+      
+      <PasswordInput
+       placeholder="Password"
+       value={pass}
+       onChangeText={setPass}
+     />
 
       <Button title="Log In" onPress={onLogin} />
 
