@@ -195,6 +195,17 @@ const saveProfile = async () => {
 
 // track which team you’re renaming:
   const [renameTeamId,  setRenameTeamId]    = useState(null);
+
+  const [showAddModal, setShowAddModal]     = useState(false);
+  const [teamToAddTo,  setTeamToAddTo]      = useState(null);
+  const [addSearch,    setAddSearch]        = useState('');
+
+  // for Members pagination
+  const [currentMembersPage, setCurrentMembersPage] = useState(1);
+
+// for History pagination
+  const [currentHistoryPage, setCurrentHistoryPage] = useState(1);
+
   const pageSize = 20;
 
   const [teams, setTeams]                 = useState({});
@@ -572,39 +583,46 @@ const confirmRename = async () => {
   setRenamedName('');
 };
 
-// 6) UI helper to pop a list of members *not yet* in that team:
-const addMemberToTeamPrompt = teamId => {
-  // filter out anyone who already has this teamId in their teamsMap
-  const available = members.filter(
-    m => !(teamsMap[m.id] || []).includes(teamId)
-  );
-  if (available.length === 0) {
-    return Alert.alert('No one left to add');
-  }
+// // 6) UI helper to pop a list of members *not yet* in that team:
+// const addMemberToTeamPrompt = teamId => {
+//   // filter out anyone who already has this teamId in their teamsMap
+//   const available = members.filter(
+//     m => !(teamsMap[m.id] || []).includes(teamId)
+//   );
+//   if (available.length === 0) {
+//     return Alert.alert('No one left to add');
+//   }
 
-  Alert.alert(
-    `Add to ${teamsList.find(t => t.id === teamId)?.name}`,
-    null,
-    [
-      // one button per available member
-      ...available.map(m => ({
-        text: m.name,
-        onPress: async () => {
-          // 1) write to RTDB under members/{uid}/Teams/{teamId} = true
-          await set(ref(db, `members/${m.id}/Teams/${teamId}`), true);
+//   Alert.alert(
+//     `Add to ${teamsList.find(t => t.id === teamId)?.name}`,
+//     null,
+//     [
+//       // one button per available member
+//       ...available.map(m => ({
+//         text: m.name,
+//         onPress: async () => {
+//           // 1) write to RTDB under members/{uid}/Teams/{teamId} = true
+//           await set(ref(db, `members/${m.id}/Teams/${teamId}`), true);
           
-          // 2) update local multi-team lookup
-          setTeamsMap(prev => ({
-            ...prev,
-            [m.id]: [...(prev[m.id] || []), teamId],
-          }));
-        }
-      })),
-      // Cancel button
-      { text: 'Cancel', style: 'cancel' }
-    ]
-  );
+//           // 2) update local multi-team lookup
+//           setTeamsMap(prev => ({
+//             ...prev,
+//             [m.id]: [...(prev[m.id] || []), teamId],
+//           }));
+//         }
+//       })),
+//       // Cancel button
+//       { text: 'Cancel', style: 'cancel' }
+//     ]
+//   );
+// };
+
+const addMemberToTeamPrompt = teamId => {
+  setTeamToAddTo(teamId);
+  setAddSearch('');
+  setShowAddModal(true);
 };
+
 // 2) swap out your Alert.prompt(...) call for this helper:
 function openRenameModal(id, currentName) {
   setRenameTeamId(id);
@@ -661,6 +679,53 @@ const pctPresentFor = (dateKey) => {
   const displayedItems = filteredMembers.slice(
     (currentPage-1)*pageSize, currentPage*pageSize
   );
+
+// ─── Pagination for Teams ───
+const filteredTeams = teamsList.filter(t =>
+  t.name.toLowerCase().includes(searchText.trim().toLowerCase())
+);
+const totalTeamPages = Math.max(
+  1,
+  Math.ceil(filteredTeams.length / pageSize)
+);
+const displayedTeams = filteredTeams.slice(
+  (currentPage - 1) * pageSize,
+  currentPage * pageSize
+);;
+
+// ─── Pagination for Members View ───
+const filteredMembersList = members.filter(m =>
+  m.name.toLowerCase().includes(searchText.trim().toLowerCase())
+);
+const totalMemberPages = Math.max(
+  1,
+  Math.ceil(filteredMembersList.length / pageSize)
+);
+const displayedMemberItems = filteredMembersList.slice(
+  (currentMembersPage - 1) * pageSize,
+  currentMembersPage * pageSize
+);
+
+// ─── Pagination for History View ───
+// 1) Filter your dateList by the search term
+const filteredDates = dateList.filter(dateKey => {
+  const label = dateKey === todayKey ? 'Today' : formatKey(dateKey);
+  return label
+    .toLowerCase()
+    .includes(historySearch.trim().toLowerCase());
+});
+
+// 2) Compute how many pages
+const totalHistoryPages = Math.max(
+  1,
+  Math.ceil(filteredDates.length / pageSize)
+);
+
+// 3) Slice out the items for the current page
+const displayedHistoryItems = filteredDates.slice(
+  (currentHistoryPage - 1) * pageSize,
+  currentHistoryPage * pageSize
+);
 
   // — Unique team names & expansion state —
   const uniqueTeams = teamsList.map(t=>t.name);
@@ -1072,39 +1137,63 @@ const pctPresentFor = (dateKey) => {
 
 
 
-      {/* Members View */}
-      {viewMode==='members' && (
-        <View style={{flex:1}}>
-          <Text style={styles.heading}>Registered Members</Text>
-          <TextInput
-            style={styles.search}
-            placeholder="Search members…"
-            placeholderTextColor="#666"
-            value={searchText}
-            onChangeText={setSearchText}
-          />
-          <FlatList
-            data={displayedItems}
-            keyExtractor={i=>i.id}
-            renderItem={renderMemberRow}
-            ListEmptyComponent={<Text style={styles.empty}>No members</Text>}
-          />
-        </View>
-      )}
+{/* Members View */}
+{viewMode === 'members' && (
+  <View style={{ flex: 1, padding: 16 }}>
+    <Text style={styles.heading}>Registered Members</Text>
+    <TextInput
+      style={styles.search}
+      placeholder="Search members…"
+      placeholderTextColor="#666"
+      value={searchText}
+      onChangeText={text => {
+        setSearchText(text);
+        setCurrentPage(1);
+      }}
+    />
 
-      {/* Teams View */}
-      {viewMode==='groups' && (
-        <View style={{flex:1, padding:16}}>
-          <View style={{ flexDirection:'row', marginBottom:12 }}>
-            <TextInput
-              style={[styles.input,{ flex:1 }]}
-              placeholder="New team/group name"
-              placeholderTextColor="#666"
-              value={newTeamName}
-              onChangeText={setNewTeamName}
-            />
-            <Button title="Add" onPress={createTeam}/>
-          </View>
+    <FlatList
+      data={displayedItems}
+      keyExtractor={i => i.id}
+      renderItem={renderMemberRow}
+      ListEmptyComponent={<Text style={styles.empty}>No members</Text>}
+    />
+
+    {/* pagination */}
+    {filteredMembers.length > pageSize && (
+      <View style={styles.pagination}>
+        <Button
+          title="Prev"
+          disabled={currentPage <= 1}
+          onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
+        />
+        <Text style={styles.pageInfo}>
+          {currentPage} / {totalPages}
+        </Text>
+        <Button
+          title="Next"
+          disabled={currentPage >= totalPages}
+          onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+        />
+      </View>
+    )}
+  </View>
+)}
+
+{/* Teams View */}
+{viewMode === 'groups' && (
+  <View style={{ flex: 1, padding: 16 }}>
+    {/* add new team */}
+    <View style={{ flexDirection: 'row', marginBottom: 12 }}>
+      <TextInput
+        style={[styles.input, { flex: 1 }]}
+        placeholder="New team/group name"
+        placeholderTextColor="#666"
+        value={newTeamName}
+        onChangeText={setNewTeamName}
+      />
+      <Button title="Add" onPress={createTeam} />
+    </View>
 
           {/* Rename Team Modal */}
           <Modal
@@ -1135,157 +1224,315 @@ const pctPresentFor = (dateKey) => {
             </View>
           </Modal>
 
-          <FlatList
-  data={teamsList}                              // <-- use the array of {id,name}
-  keyExtractor={item => item.id}                // <-- stable unique key
-  renderItem={({ item }) => (
-    <View style={styles.historyBlock}>
-      <TouchableOpacity
-        style={styles.historyHeader}
-        onPress={() => toggleTeamExpansion(item.id)}
-      >
-        <Text style={styles.historyDate}>
-          {item.name} ({members.filter(m => teamsMap[m.id]?.includes(item.id)).length})
-        </Text>
-        <View style={{ flexDirection:'row', alignItems:'center' }}>
-          <Ionicons
-            name="add-circle-outline"
-            size={20}
-            color="#4CAF50"
-            onPress={() => addMemberToTeamPrompt(item.id)}
-            style={{ marginRight: 12 }}
-          />
-          <Ionicons
-            name="pencil"
-            size={20}
-            color="#888"
-            onPress={() => startRename(item.id, item.name)}
-            style={{ marginRight: 12 }}
-          />
-          <Ionicons
-            name="trash"
-            size={20}
-            color="#e33"
-            onPress={() => deleteTeam(item.id)}
-            style={{ marginRight: 12 }}
-          />
-          <Ionicons
-            name={expandedTeams.includes(item.id) ? 'chevron-up' : 'chevron-down'}
-            size={20}
-            color="#333"
-          />
-        </View>
-      </TouchableOpacity>
-
-      {expandedTeams.includes(item.id) && (
-        members
-          .filter(m => teamsMap[m.id]?.includes(item.id))
-          .map(m => (
-            <View key={m.id} style={styles.row}>
-              <Text style={styles.member}>{m.name}</Text>
-              <TouchableOpacity
-                onPress={() =>
-                  confirmRemoveFromTeam(
-                    m.id,
-                    item.id,
-                    item.name // human‐readable team name
-                  )
-                }
-              >
-                <Text style={{ color:'#e33', fontWeight:'500' }}>Remove</Text>
-              </TouchableOpacity>
-            </View>
-          ))
-      )}
+{/* Add-Member Modal */}
+<Modal visible={showAddModal} animationType="slide">
+  <SafeAreaView style={{ flex: 1 }}>
+    {/* Header */}
+    <View style={{ flexDirection: 'row', padding: 16, alignItems: 'center' }}>
+      <TextInput
+        style={{
+          flex: 1,
+          borderWidth: 1,
+          borderColor: '#ccc',
+          borderRadius: 6,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+        }}
+        placeholder="Search members…"
+        value={addSearch}
+        onChangeText={setAddSearch}
+      />
+      <Button title="Cancel" onPress={() => setShowAddModal(false)} />
     </View>
+
+    {/* Filtered list */}
+    <FlatList
+  data={members
+    .filter(m => !(teamsMap[m.id] || []).includes(teamToAddTo))
+    .filter(m =>
+      m.name.toLowerCase().includes(addSearch.trim().toLowerCase())
+    )}
+  keyExtractor={m => m.id}
+  renderItem={({ item }) => (
+    <TouchableOpacity
+      onPress={async () => {
+        // 1) write to RTDB
+        await set(ref(db, `members/${item.id}/Teams/${teamToAddTo}`), true);
+        // 2) update local map
+        setTeamsMap(prev => ({
+          ...prev,
+          [item.id]: [...(prev[item.id] || []), teamToAddTo],
+        }));
+
+        // 3) show confirmation & close
+        const teamName = teamsList.find(t => t.id === teamToAddTo)?.name || '';
+        Alert.alert(
+          'Member Added',
+          `${item.name} has been added to ${teamName}.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => setShowAddModal(false),
+            },
+          ]
+        );
+      }}
+    >
+      <Text style={{ padding: 16 }}>{item.name}</Text>
+    </TouchableOpacity>
   )}
-  ListEmptyComponent={<Text style={styles.empty}>No teams</Text>}
+  ItemSeparatorComponent={() => (
+    <View style={{ height: 1, backgroundColor: '#eee' }} />
+  )}
+  ListEmptyComponent={
+    <Text style={{ textAlign: 'center', marginTop: 20, color: '#888' }}>
+      No members to add.
+    </Text>
+  }
 />
-        </View>
-      )}
+  </SafeAreaView>
+</Modal>
+
+    {/* search bar */}
+    <TextInput
+      style={[styles.input, { marginBottom: 12 }]}
+      placeholder="Search teams…"
+      placeholderTextColor="#666"
+      value={searchText}
+      onChangeText={text => {
+        setSearchText(text);
+        setCurrentPage(1);
+      }}
+    />
+
+    {/* filter & paginate */}
+    {(() => {
+      // const filteredTeams = teamsList.filter(t =>
+      //   t.name.toLowerCase().includes(searchText.trim().toLowerCase())
+      // );
+      // const totalPages = Math.max(1, Math.ceil(filteredTeams.length / PAGE_SIZE));
+      // const displayedTeams = filteredTeams.slice(
+      //   (currentPage - 1) * PAGE_SIZE,
+      //   currentPage * PAGE_SIZE
+      // );
+
+      return (
+        <>
+          <FlatList
+            data={displayedTeams}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <View style={styles.historyBlock}>
+                <TouchableOpacity
+                  style={styles.historyHeader}
+                  onPress={() => toggleTeamExpansion(item.id)}
+                >
+                  <Text style={styles.historyDate}>
+                    {item.name} (
+                      {members.filter(m => teamsMap[m.id]?.includes(item.id)).length}
+                    )
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={20}
+                      color="#4CAF50"
+                      onPress={() => addMemberToTeamPrompt(item.id)}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Ionicons
+                      name="pencil"
+                      size={20}
+                      color="#888"
+                      onPress={() => startRename(item.id, item.name)}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Ionicons
+                      name="trash"
+                      size={20}
+                      color="#e33"
+                      onPress={() => deleteTeam(item.id)}
+                      style={{ marginRight: 12 }}
+                    />
+                    <Ionicons
+                      name={expandedTeams.includes(item.id) ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#333"
+                    />
+                  </View>
+                </TouchableOpacity>
+                {expandedTeams.includes(item.id) &&
+                  members
+                    .filter(m => teamsMap[m.id]?.includes(item.id))
+                    .map(m => (
+                      <View key={m.id} style={styles.row}>
+                        <Text style={styles.member}>{m.name}</Text>
+                        <TouchableOpacity
+                          onPress={() =>
+                            confirmRemoveFromTeam(m.id, item.id, item.name)
+                          }
+                        >
+                          <Text style={{ color: '#e33', fontWeight: '500' }}>
+                            Remove
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))
+                }
+              </View>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.empty}>No teams match your search.</Text>
+            }
+          />
+
+          {/* pagination */}
+          <View style={styles.pagination}>
+            <Button
+              title="Prev"
+              disabled={currentPage <= 1}
+              onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
+            />
+            <Text style={styles.pageInfo}>
+              Page {currentPage} of {totalPages}
+            </Text>
+            <Button
+              title="Next"
+              disabled={currentPage >= totalPages}
+              onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            />
+          </View>
+        </>
+      );
+    })()}
+  </View>
+)}
 
 {/* History View */}
 {viewMode === 'history' && (
-  <View style={{ flex: 1 }}>
+  <View style={{ flex: 1, padding: 16 }}>
     {/* Search bar */}
     <TextInput
       style={styles.historySearch}
       placeholder="Search dates…"
       placeholderTextColor="#666"
       value={historySearch}
-      onChangeText={setHistorySearch}
+      onChangeText={text => {
+        setHistorySearch(text);
+        setCurrentHistoryPage(1);
+      }}
     />
 
-    <FlatList
-      data={dateList.filter(dateKey => {
-        const label = dateKey === todayKey
-          ? 'Today'
-          : formatKey(dateKey);
+    {/* Filter & paginate */}
+    {(() => {
+      // 1) filter dateList by your historySearch
+      const filteredDates = dateList.filter(dateKey => {
+        const label = dateKey === todayKey ? 'Today' : formatKey(dateKey);
         return label
           .toLowerCase()
           .includes(historySearch.trim().toLowerCase());
-      })}
-      keyExtractor={dateKey => dateKey}
-      contentContainerStyle={{ padding: 16 }}
-      renderItem={({ item: dateKey }) => {
-        const attForDay    = allAttendance[dateKey] || {};
-        const presentCount = members.filter(m => attForDay[m.id]).length;
-        const pct          = members.length
-           ? Math.round((presentCount / members.length) * 100)
-           : 0;
-        const isExp        = expandedDates.includes(dateKey);
+      });
 
-        return (
-          <View style={styles.historyBlock}>
-            {/* header row */}
-            <TouchableOpacity
-              style={styles.historyHeader}
-              onPress={() =>
-                setExpandedDates(ed =>
-                  ed.includes(dateKey)
-                    ? ed.filter(d => d !== dateKey)
-                    : [...ed, dateKey]
-                )
-              }
-            >
-              <Text style={styles.historyDate}>
-                {dateKey === todayKey 
-                  ? 'Today' 
-                  : formatKey(dateKey)
-                } ({presentCount} present, {pct}%)
-              </Text>
-              <Ionicons
-                name={isExp ? 'chevron-up' : 'chevron-down'}
-                size={20}
-                color="#333"
-              />
-            </TouchableOpacity>
+      // 2) total pages
+      const totalHistoryPages = Math.max(
+        1,
+        Math.ceil(filteredDates.length / pageSize)
+      );
 
-            {/* expanded member list */}
-            {isExp && members.map(m => {
-              const present = Boolean(attForDay[m.id]);
+      // 3) slice for current page
+      const displayedDates = filteredDates.slice(
+        (currentHistoryPage - 1) * pageSize,
+        currentHistoryPage * pageSize
+      );
+
+      return (
+        <>
+          <FlatList
+            data={displayedDates}
+            keyExtractor={dk => dk}
+            contentContainerStyle={{ paddingBottom: 16 }}
+            renderItem={({ item: dateKey }) => {
+              const attForDay = allAttendance[dateKey] || {};
+              const presentCount = members.filter(m => attForDay[m.id]).length;
+              const pct = members.length
+                ? Math.round((presentCount / members.length) * 100)
+                : 0;
+              const isExp = expandedDates.includes(dateKey);
+
               return (
-                <View key={m.id} style={styles.row}>
-                  <Text style={styles.member}>{m.name}</Text>
-                  <Text
-                    style={[
-                      present
-                        ? styles.presentText
-                        : { color: '#e33', fontWeight: '500' },
-                    ]}
+                <View style={styles.historyBlock}>
+                  <TouchableOpacity
+                    style={styles.historyHeader}
+                    onPress={() =>
+                      setExpandedDates(ed =>
+                        ed.includes(dateKey)
+                          ? ed.filter(d => d !== dateKey)
+                          : [...ed, dateKey]
+                      )
+                    }
                   >
-                    {present ? 'Present' : 'Absent'}
-                  </Text>
+                    <Text style={styles.historyDate}>
+                      {dateKey === todayKey ? 'Today' : formatKey(dateKey)}{' '}
+                      ({presentCount} present, {pct}%)
+                    </Text>
+                    <Ionicons
+                      name={isExp ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color="#333"
+                    />
+                  </TouchableOpacity>
+
+                  {isExp &&
+                    members.map(m => {
+                      const present = Boolean(attForDay[m.id]);
+                      return (
+                        <View key={m.id} style={styles.row}>
+                          <Text style={styles.member}>{m.name}</Text>
+                          <Text
+                            style={
+                              present
+                                ? styles.presentText
+                                : { color: '#e33', fontWeight: '500' }
+                            }
+                          >
+                            {present ? 'Present' : 'Absent'}
+                          </Text>
+                        </View>
+                      );
+                    })}
                 </View>
               );
-            })}
-          </View>
-        );
-      }}
-      ListEmptyComponent={
-        <Text style={styles.empty}>No attendance history</Text>
+            }}
+            ListEmptyComponent={
+              <Text style={styles.empty}>No attendance history</Text>
+            }
+          />
+
+{/* ─── Pagination ─── */}
+{filteredDates.length > pageSize && (
+  <View style={styles.pagination}>
+    <Button
+      title="Prev"
+      disabled={currentHistoryPage <= 1}
+      onPress={() =>
+        setCurrentHistoryPage(p => Math.max(1, p - 1))
       }
     />
+    <Text style={styles.pageInfo}>
+      Page {currentHistoryPage} of {totalHistoryPages}
+    </Text>
+    <Button
+      title="Next"
+      disabled={currentHistoryPage >= totalHistoryPages}
+      onPress={() =>
+        setCurrentHistoryPage(p => Math.min(totalHistoryPages, p + 1))
+      }
+    />
+  </View>
+)}
+        </>
+      );
+    })()}
   </View>
 )}
 
