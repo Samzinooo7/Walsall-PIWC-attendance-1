@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import 'firebase/compat/auth';
 import 'firebase/compat/database';
 import { equalTo, get, onValue, orderByChild, push, query, ref, remove, set } from 'firebase/database';
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -18,12 +18,16 @@ import {
   View
 } from 'react-native';
 import ExportButton from './components/ExportButton.js';
+import { AuthContext } from './contexts/AuthContext.js';
 import { auth, db } from './firebaseConfig'; // compat versions
 
 export default function MainApp({ navigation }) {
+const profile = useContext(AuthContext);
+const isAdmin = profile?.role === 'admin';
   // — Manage-Account state & handlers —
   const [showManage, setShowManage] = useState(false);
   const [currentUserChurch, setCurrentUserChurch] = useState(null);
+  const [currentUserRole,   setCurrentUserRole]   = useState('admin');
 // ── at top of MainApp() ──
 const [memberCount,    setMemberCount]    = useState(0);
 const [avgAttendance,  setAvgAttendance]  = useState(0);
@@ -220,19 +224,24 @@ const saveProfile = async () => {
   const [renamingId, setRenamingId]   = useState(null);
   const [renamedName, setRenamedName] = useState('');
 
-// 1) Load the current user’s church once on mount
+// 1) Load the current user’s church & role once on mount
 useEffect(() => {
   const uid = auth.currentUser?.uid;
   if (!uid) return navigation.replace('Login');
-  get(ref(db, `users/${uid}/church`))
-  .then(snap => setCurrentUserChurch(snap.val()))
-  .catch(() => setCurrentUserChurch(null));
+
+  get(ref(db, `users/${uid}`))
+    .then(snap => {
+      const profile = snap.val() || {};
+      setCurrentUserChurch(profile.church || null);
+      setCurrentUserRole(profile.role   || 'admin');
+    })
+    .catch(err => {
+      console.error('Failed to load user profile', err);
+      setCurrentUserChurch(null);
+    });
 }, []);
 
-  
-
-// 2) Load only members in that church via an RTDB query,
-//    and pull in a multi‐team list from m.Teams
+// 2) Load only members in that church via an RTDB query
 useEffect(() => {
   if (!currentUserChurch) return;
 
@@ -242,7 +251,6 @@ useEffect(() => {
     equalTo(currentUserChurch)
   );
 
-  // subscribe …
   const unsubscribe = onValue(membersQ, snapshot => {
     const data = snapshot.val() || {};
 
@@ -258,36 +266,35 @@ useEffect(() => {
       age:      m.Age              || '',
       joined:   m.Joined           || null,
       gender:   m.Gender           || '',
-      // collect all team-IDs (keys under m.Teams), or empty array
       teams: Array.isArray(m.Teams)
-      ? m.Teams
-      : m.Teams
-        ? Object.keys(m.Teams)
-        : []
+        ? m.Teams
+        : m.Teams
+          ? Object.keys(m.Teams)
+          : [],
     }));
 
-// 2) Update the members list
-setMembers(list);
+    // 2) Update the members list
+    setMembers(list);
 
-// 3) Rebuild your present-toggles map
-setPresentMap(prev => {
-  const updated = {};
-  list.forEach(m => {
-    updated[m.id] = prev[m.id] || false;
+    // 3) Rebuild your present-toggles map
+    setPresentMap(prev => {
+      const updated = {};
+      list.forEach(m => {
+        updated[m.id] = prev[m.id] || false;
+      });
+      return updated;
+    });
+
+    // 4) Rebuild your multi-team lookup (teamsMap)
+    setTeamsMap(
+      list.reduce((acc, m) => {
+        acc[m.id] = m.teams;
+        return acc;
+      }, {})
+    );
   });
-  return updated;
-});
 
-// 4) Rebuild your multi-team lookup (teamsMap)
-setTeamsMap(
-  list.reduce((acc, m) => {
-    acc[m.id] = m.teams;
-    return acc;
-  }, {})
-);
-});
-
-return unsubscribe;
+  return unsubscribe;
 }, [currentUserChurch]);
 
 
@@ -751,33 +758,65 @@ const displayedHistoryItems = filteredDates.slice(
     );
   };
 
-  const renderMemberRow = ({ item }) => (
-    <View style={styles.row}>
-      <Text style={styles.member}>{item.name}</Text>
-      <View style={styles.memberActions}>
-        <TouchableOpacity style={styles.editBtn} onPress={()=>{
-          setEditingMember(item.id);
-          setEditFields({
-            name: item.name,
-            birthday: item.birthday,
-            age: item.age,
-            address: item.address,
-            phone: item.phone,
-            email: item.email,
-            role: item.role,
-            gender: item.gender,
-            team: teams[item.id],
-          });
-        }}>
-          <Text style={styles.editBtnText}>Edit</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.viewBtn} onPress={()=>setProfileMember(item)}>
-          <Text style={styles.viewBtnText}>View</Text>
-        </TouchableOpacity>
-        <Ionicons name="trash" size={24} color="#e33" onPress={()=>deleteMember(item.id)} />
+  const renderMemberRow = ({ item }) => {
+    // join that member’s team IDs → names
+    const teamNames = (teamsMap[item.id] || [])
+      .map(id => teamsList.find(t => t.id === id)?.name)
+      .filter(Boolean)
+      .join(', ');
+  
+    const isUsher = currentUserRole === 'usher';
+  
+    return (
+      <View style={styles.row}>
+        <Text style={styles.member}>{item.name}</Text>
+  
+        <View style={styles.memberActions}>
+          {/* only admins can edit */}
+          {!isUsher && (
+            <TouchableOpacity
+              style={styles.editBtn}
+              onPress={() => {
+                setEditingMember(item.id);
+                setEditFields({
+                  name:     item.name,
+                  birthday: item.birthday,
+                  age:      item.age,
+                  address:  item.address,
+                  phone:    item.phone,
+                  email:    item.email,
+                  role:     item.role,
+                  gender:   item.gender,
+                  teams:    teamNames,     // seeded from teamsMap
+                });
+              }}
+            >
+              <Text style={styles.editBtnText}>Edit</Text>
+            </TouchableOpacity>
+          )}
+  
+          {/* everyone gets a View button */}
+          <TouchableOpacity
+            style={styles.viewBtn}
+            onPress={() => setProfileMember(item)}
+          >
+            <Text style={styles.viewBtnText}>View</Text>
+          </TouchableOpacity>
+  
+          {/* only admins can delete */}
+          {!isUsher && (
+            <Ionicons
+              name="trash"
+              size={24}
+              color="#e33"
+              onPress={() => deleteMember(item.id)}
+              style={{ marginLeft: 12 }}
+            />
+          )}
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   const renderTeam = ({ item }) => {
     const { id: teamId, name: teamName } = item;
@@ -1117,12 +1156,15 @@ const displayedHistoryItems = filteredDates.slice(
 
         <Button title="Return" onPress={() => setShowManage(false)} />
 
-        <ExportButton
-  members={members}
-  allAttendance={allAttendance}
-  dateList={dateList}
-  teamsList={teamsList}
-/>
+{/* Export Button only for admin */}
+{isAdmin && (
+  <ExportButton
+    members={members}
+    allAttendance={allAttendance}
+    dateList={dateList}
+    teamsList={teamsList}
+  />
+)}
 
 {/* Footer: copyright & trademark */}
 <View style={styles.footer}>
@@ -1183,117 +1225,98 @@ const displayedHistoryItems = filteredDates.slice(
 {/* Teams View */}
 {viewMode === 'groups' && (
   <View style={{ flex: 1, padding: 16 }}>
-    {/* add new team */}
-    <View style={{ flexDirection: 'row', marginBottom: 12 }}>
-      <TextInput
-        style={[styles.input, { flex: 1 }]}
-        placeholder="New team/group name"
-        placeholderTextColor="#666"
-        value={newTeamName}
-        onChangeText={setNewTeamName}
-      />
-      <Button title="Add" onPress={createTeam} />
-    </View>
-
-          {/* Rename Team Modal */}
-          <Modal
-            visible={!!renamingId}
-            transparent
-            animationType="fade"
-            onRequestClose={()=>setRenamingId(null)}
-          >
-            <View style={{
-              flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'rgba(0,0,0,0.3)'
-            }}>
-              <View style={{
-                width:'80%', padding:16, backgroundColor:'#fff', borderRadius:8
-              }}>
-                <Text style={{ marginBottom:8 }}>Rename team</Text>
-                <TextInput
-                  style={styles.input}
-                  value={renamedName}
-                  placeholderTextColor="#666"
-                  onChangeText={setRenamedName}
-                />
-                <View style={{ flexDirection:'row', justifyContent:'flex-end', marginTop:12 }}>
-                  <Button title="Cancel" onPress={()=>setRenamingId(null)}/>
-                  <View style={{ width:12 }}/>
-                  <Button title="OK" onPress={confirmRename}/>
-                </View>
-              </View>
-            </View>
-          </Modal>
-
-{/* Add-Member Modal */}
-<Modal visible={showAddModal} animationType="slide">
-  <SafeAreaView style={{ flex: 1 }}>
-    {/* Header */}
-    <View style={{ flexDirection: 'row', padding: 16, alignItems: 'center' }}>
-      <TextInput
-        style={{
-          flex: 1,
-          borderWidth: 1,
-          borderColor: '#ccc',
-          borderRadius: 6,
-          paddingHorizontal: 12,
-          paddingVertical: 8,
-        }}
-        placeholder="Search members…"
-        value={addSearch}
-        onChangeText={setAddSearch}
-      />
-      <Button title="Cancel" onPress={() => setShowAddModal(false)} />
-    </View>
-
-    {/* Filtered list */}
-    <FlatList
-  data={members
-    .filter(m => !(teamsMap[m.id] || []).includes(teamToAddTo))
-    .filter(m =>
-      m.name.toLowerCase().includes(addSearch.trim().toLowerCase())
+    {/* ─── Add New Team (admins only) ─── */}
+    {isAdmin && (
+      <View style={{ flexDirection: 'row', marginBottom: 12 }}>
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          placeholder="New team/group name"
+          placeholderTextColor="#666"
+          value={newTeamName}
+          onChangeText={setNewTeamName}
+        />
+        <Button title="Add" onPress={createTeam} />
+      </View>
     )}
-  keyExtractor={m => m.id}
-  renderItem={({ item }) => (
-    <TouchableOpacity
-      onPress={async () => {
-        // 1) write to RTDB
-        await set(ref(db, `members/${item.id}/Teams/${teamToAddTo}`), true);
-        // 2) update local map
-        setTeamsMap(prev => ({
-          ...prev,
-          [item.id]: [...(prev[item.id] || []), teamToAddTo],
-        }));
 
-        // 3) show confirmation & close
-        const teamName = teamsList.find(t => t.id === teamToAddTo)?.name || '';
-        Alert.alert(
-          'Member Added',
-          `${item.name} has been added to ${teamName}.`,
-          [
-            {
-              text: 'OK',
-              onPress: () => setShowAddModal(false),
-            },
-          ]
-        );
-      }}
-    >
-      <Text style={{ padding: 16 }}>{item.name}</Text>
-    </TouchableOpacity>
-  )}
-  ItemSeparatorComponent={() => (
-    <View style={{ height: 1, backgroundColor: '#eee' }} />
-  )}
-  ListEmptyComponent={
-    <Text style={{ textAlign: 'center', marginTop: 20, color: '#888' }}>
-      No members to add.
-    </Text>
-  }
-/>
-  </SafeAreaView>
-</Modal>
+    {/* ─── Rename Team Modal (admins only) ─── */}
+    {isAdmin && (
+      <Modal
+        visible={!!renamingId}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRenamingId(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={{ marginBottom: 8 }}>Rename team</Text>
+            <TextInput
+              style={styles.input}
+              value={renamedName}
+              placeholderTextColor="#666"
+              onChangeText={setRenamedName}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+              <Button title="Cancel" onPress={() => setRenamingId(null)} />
+              <View style={{ width: 12 }} />
+              <Button title="OK" onPress={confirmRename} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    )}
 
-    {/* search bar */}
+    {/* ─── Add‐Member Modal (admins only) ─── */}
+    {isAdmin && (
+      <Modal visible={showAddModal} animationType="slide">
+        <SafeAreaView style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', padding: 16, alignItems: 'center' }}>
+            <TextInput
+              style={styles.addModalSearch}
+              placeholder="Search members…"
+              value={addSearch}
+              onChangeText={setAddSearch}
+            />
+            <Button title="Cancel" onPress={() => setShowAddModal(false)} />
+          </View>
+          <FlatList
+            data={members
+              .filter(m => !(teamsMap[m.id] || []).includes(teamToAddTo))
+              .filter(m =>
+                m.name.toLowerCase().includes(addSearch.trim().toLowerCase())
+              )}
+            keyExtractor={m => m.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                onPress={async () => {
+                  await set(ref(db, `members/${item.id}/Teams/${teamToAddTo}`), true);
+                  setTeamsMap(prev => ({
+                    ...prev,
+                    [item.id]: [...(prev[item.id] || []), teamToAddTo],
+                  }));
+                  const teamName = teamsList.find(t => t.id === teamToAddTo)?.name || '';
+                  Alert.alert(
+                    'Member Added',
+                    `${item.name} has been added to ${teamName}.`,
+                    [{ text: 'OK', onPress: () => setShowAddModal(false) }]
+                  );
+                }}
+              >
+                <Text style={{ padding: 16 }}>{item.name}</Text>
+              </TouchableOpacity>
+            )}
+            ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: '#eee' }} />}
+            ListEmptyComponent={
+              <Text style={{ textAlign: 'center', marginTop: 20, color: '#888' }}>
+                No members to add.
+              </Text>
+            }
+          />
+        </SafeAreaView>
+      </Modal>
+    )}
+
+    {/* ─── Search Bar (everyone) ─── */}
     <TextInput
       style={[styles.input, { marginBottom: 12 }]}
       placeholder="Search teams…"
@@ -1305,103 +1328,107 @@ const displayedHistoryItems = filteredDates.slice(
       }}
     />
 
-    {/* filter & paginate */}
+    {/* ─── Filter & Paginate ─── */}
     {(() => {
-      // const filteredTeams = teamsList.filter(t =>
-      //   t.name.toLowerCase().includes(searchText.trim().toLowerCase())
-      // );
-      // const totalPages = Math.max(1, Math.ceil(filteredTeams.length / PAGE_SIZE));
-      // const displayedTeams = filteredTeams.slice(
-      //   (currentPage - 1) * PAGE_SIZE,
-      //   currentPage * PAGE_SIZE
-      // );
-
+      // you already have displayedTeams, totalPages, etc.
       return (
         <>
           <FlatList
             data={displayedTeams}
             keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <View style={styles.historyBlock}>
-                <TouchableOpacity
-                  style={styles.historyHeader}
-                  onPress={() => toggleTeamExpansion(item.id)}
-                >
-                  <Text style={styles.historyDate}>
-                    {item.name} (
-                      {members.filter(m => teamsMap[m.id]?.includes(item.id)).length}
-                    )
-                  </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Ionicons
-                      name="add-circle-outline"
-                      size={20}
-                      color="#4CAF50"
-                      onPress={() => addMemberToTeamPrompt(item.id)}
-                      style={{ marginRight: 12 }}
-                    />
-                    <Ionicons
-                      name="pencil"
-                      size={20}
-                      color="#888"
-                      onPress={() => startRename(item.id, item.name)}
-                      style={{ marginRight: 12 }}
-                    />
-                    <Ionicons
-                      name="trash"
-                      size={20}
-                      color="#e33"
-                      onPress={() => deleteTeam(item.id)}
-                      style={{ marginRight: 12 }}
-                    />
-                    <Ionicons
-                      name={expandedTeams.includes(item.id) ? 'chevron-up' : 'chevron-down'}
-                      size={20}
-                      color="#333"
-                    />
-                  </View>
-                </TouchableOpacity>
-                {expandedTeams.includes(item.id) &&
-                  members
-                    .filter(m => teamsMap[m.id]?.includes(item.id))
-                    .map(m => (
-                      <View key={m.id} style={styles.row}>
-                        <Text style={styles.member}>{m.name}</Text>
-                        <TouchableOpacity
-                          onPress={() =>
-                            confirmRemoveFromTeam(m.id, item.id, item.name)
-                          }
-                        >
-                          <Text style={{ color: '#e33', fontWeight: '500' }}>
-                            Remove
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    ))
-                }
-              </View>
-            )}
-            ListEmptyComponent={
-              <Text style={styles.empty}>No teams match your search.</Text>
-            }
+            renderItem={({ item }) => {
+              const memberCount = members.filter(m =>
+                teamsMap[m.id]?.includes(item.id)
+              ).length;
+              const expanded = expandedTeams.includes(item.id);
+
+              return (
+                <View style={styles.historyBlock}>
+                  <TouchableOpacity
+                    style={styles.historyHeader}
+                    onPress={() => toggleTeamExpansion(item.id)}
+                  >
+                    <Text style={styles.historyDate}>
+                      {item.name} ({memberCount})
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {/* CRUD icons only for admins */}
+                      {isAdmin && (
+                        <>
+                          <Ionicons
+                            name="add-circle-outline"
+                            size={20}
+                            color="#4CAF50"
+                            onPress={() => {
+                              setTeamToAddTo(item.id);
+                              setShowAddModal(true);
+                            }}
+                            style={{ marginRight: 12 }}
+                          />
+                          <Ionicons
+                            name="pencil"
+                            size={20}
+                            color="#888"
+                            onPress={() => startRename(item.id, item.name)}
+                            style={{ marginRight: 12 }}
+                          />
+                          <Ionicons
+                            name="trash"
+                            size={20}
+                            color="#e33"
+                            onPress={() => deleteTeam(item.id)}
+                            style={{ marginRight: 12 }}
+                          />
+                        </>
+                      )}
+                      <Ionicons
+                        name={expanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#333"
+                      />
+                    </View>
+                  </TouchableOpacity>
+                  {expanded &&
+                    members
+                      .filter(m => teamsMap[m.id]?.includes(item.id))
+                      .map(m => (
+                        <View key={m.id} style={styles.row}>
+                          <Text style={styles.member}>{m.name}</Text>
+                          {isAdmin && (
+                            <TouchableOpacity
+                              onPress={() => confirmRemoveFromTeam(m.id, item.id, item.name)}
+                            >
+                              <Text style={{ color: '#e33', fontWeight: '500' }}>
+                                Remove
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))}
+                </View>
+              );
+            }}
+            ListEmptyComponent={<Text style={styles.empty}>No teams match your search.</Text>}
           />
 
-          {/* pagination */}
-          <View style={styles.pagination}>
-            <Button
-              title="Prev"
-              disabled={currentPage <= 1}
-              onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
-            />
-            <Text style={styles.pageInfo}>
-              Page {currentPage} of {totalPages}
-            </Text>
-            <Button
-              title="Next"
-              disabled={currentPage >= totalPages}
-              onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-            />
-          </View>
+          {/* Pagination (everyone) */}
+          {filteredTeams.length > pageSize && (
+            <View style={styles.pagination}>
+              <Button
+                title="Prev"
+                disabled={currentPage <= 1}
+                onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
+              />
+              <Text style={styles.pageInfo}>
+                Page {currentPage} of {totalPages}
+              </Text>
+              <Button
+                title="Next"
+                disabled={currentPage >= totalPages}
+                onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              />
+            </View>
+          )}
         </>
       );
     })()}
@@ -1544,65 +1571,61 @@ const displayedHistoryItems = filteredDates.slice(
 >
   <SafeAreaView style={styles.container}>
     <ScrollView contentContainerStyle={{ padding: 16 }}>
-      {profileMember && (
-        <>
-          <Text style={[styles.heading, { textAlign: 'left' }]}>
-            {profileMember.name}
-          </Text>
-          <Text style={styles.profileText}>
-            Gender: {profileMember.gender || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Birthday: {profileMember.birthday || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Age: {profileMember.age || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Address: {profileMember.address || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Phone: {profileMember.phone || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Email: {profileMember.email || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Role: {profileMember.role || '–'}
-          </Text>
-          <Text style={styles.profileText}>
-            Joined:{' '}
-            {profileMember.joined
-              ? formatKey(profileMember.joined)
-              : '–'}
-          </Text>
+      {profileMember && (() => {
+        // grab current user’s role (from context or prop)
+        const isUsher = currentUserRole === 'usher';
 
-          {/* ← NEW: Multi-team display */}
-          <Text style={styles.profileText}>
-  Teams:{' '}
-  {teamsMap[profileMember.id]?.length
-    ? Array.from(new Set(teamsMap[profileMember.id]))
-        .map(teamId => {
-          const team = teamsList.find(t => t.id === teamId)
-          return team ? team.name : '(unknown)'
-        })
-        .join(', ')
-    : '–'}
-</Text>
+        // compute last attended date
+        const lastDate = getLastAttendanceDate(profileMember.id);
+        const lastAttended = lastDate
+          ? formatKey(lastDate)
+          : 'Never';
 
-          <Text style={styles.profileText}>
-            Last Attended:{' '}
-            {(() => {
-              const d = getLastAttendanceDate(profileMember.id)
-              return d ? formatKey(d) : 'Never'
-            })()}
-          </Text>
-          <Text style={[styles.profileText, { marginTop: 12 }]}>
-            Attendance Rate:{' '}
-            {getPct(profileMember.id, profileMember.joined)}%
-          </Text>
-        </>
-      )}
+        // compute team names
+        const teamNames = (teamsMap[profileMember.id] || [])
+          .map(id => teamsList.find(t => t.id === id)?.name)
+          .filter(Boolean)
+          .join(', ') || '–';
+
+        return (
+          <>
+            <Text style={[styles.heading, { textAlign: 'left' }]}>
+              {profileMember.name}
+            </Text>
+
+            {/* fields all users see */}
+            <Text style={styles.profileText}>Gender: {profileMember.gender || '–'}</Text>
+            <Text style={styles.profileText}>Age: {profileMember.age || '–'}</Text>
+            <Text style={styles.profileText}>Role: {profileMember.role || '–'}</Text>
+            <Text style={styles.profileText}>Teams: {teamNames}</Text>
+            <Text style={styles.profileText}>Last Attended: {lastAttended}</Text>
+
+            {/* only admins see these extra fields */}
+            {!isUsher && (
+              <>
+                <Text style={styles.profileText}>
+                  Birthday: {profileMember.birthday || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Address: {profileMember.address || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Phone: {profileMember.phone || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Email: {profileMember.email || '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Joined: {profileMember.joined ? formatKey(profileMember.joined) : '–'}
+                </Text>
+                <Text style={styles.profileText}>
+                  Attendance Rate: {getPct(profileMember.id, profileMember.joined)}%
+                </Text>
+              </>
+            )}
+          </>
+        );
+      })()}
       <View style={{ marginTop: 20 }}>
         <Button
           title="Close"
