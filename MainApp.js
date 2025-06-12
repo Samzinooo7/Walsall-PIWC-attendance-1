@@ -12,6 +12,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -24,6 +25,7 @@ import { auth, db } from './firebaseConfig'; // compat versions
 export default function MainApp({ navigation }) {
 const profile = useContext(AuthContext);
 const isAdmin = profile?.role === 'admin';
+const isUsher = profile?.role === 'usher';
   // — Manage-Account state & handlers —
   const [showManage, setShowManage] = useState(false);
   const [currentUserChurch, setCurrentUserChurch] = useState(null);
@@ -179,7 +181,9 @@ const saveProfile = async () => {
 
   // — State —
   const [members, setMembers]             = useState([]);
-  const [newName, setNewName]             = useState('');
+  // const [newName, setNewName]             = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName,  setLastName]  = useState('');
   const [teamsMap, setTeamsMap]           = useState({});
   const [editingMember, setEditingMember] = useState(null);
   const [editFields, setEditFields]       = useState({});
@@ -255,28 +259,42 @@ useEffect(() => {
     const data = snapshot.val() || {};
 
     // map each member node → our UI object
-    const list = Object.entries(data).map(([id, m]) => ({
-      id,
-      name:     m.name             || '',
-      birthday: m.Birthday         || '',
-      address:  m.Address          || '',
-      phone:    m['Phone Number']  || '',
-      email:    m.Email            || '',
-      role:     m.Role             || '',
-      age:      m.Age              || '',
-      joined:   m.Joined           || null,
-      gender:   m.Gender           || '',
-      teams: Array.isArray(m.Teams)
-        ? m.Teams
-        : m.Teams
-          ? Object.keys(m.Teams)
-          : [],
-    }));
+    const list = Object.entries(data).map(([id, m]) => {
+      const first = m.firstName || '';
+      const last  = m.lastName  || '';
+      return {
+        id,
+        name:      [first, last].filter(Boolean).join(' '),
+        title:     m.Title            || '',
+        office:    m.Office           || '',
+        firstName:                    first,
+        lastName:                      last,
+        birthday:  m.Birthday         || '',
+        address:   m.Address          || '',
+        phone:     m['Phone Number']  || '',
+        email:     m.Email            || '',
+        role:      m.Role             || '',
+        age:       m.Age              || '',
+        joined:    m.Joined           || null,
+        gender:    m.Gender           || '',
+        bornAgain: m.BornAgain            === true,
+        baptisedByImmersion: m.BaptisedByImmersion    === true,
+        receivedHolyGhost:   m.ReceivedHolyGhost      === true,
+        teams: Array.isArray(m.Teams)
+          ? m.Teams
+          : m.Teams
+            ? Object.keys(m.Teams)
+            : [],
+      };
+    });
 
-    // 2) Update the members list
+    // debug the very first member
+    // console.log('Loaded member[0]:', list[0]);
+
+    // update state
     setMembers(list);
 
-    // 3) Rebuild your present-toggles map
+    // rebuild presentMap
     setPresentMap(prev => {
       const updated = {};
       list.forEach(m => {
@@ -285,7 +303,7 @@ useEffect(() => {
       return updated;
     });
 
-    // 4) Rebuild your multi-team lookup (teamsMap)
+    // rebuild teamsMap
     setTeamsMap(
       list.reduce((acc, m) => {
         acc[m.id] = m.teams;
@@ -419,15 +437,22 @@ useEffect(() => {
 
 // — Member CRUD & toggles —  
 const addMember = async () => {
-  const name = newName.trim();
-  if (!name) {
-    return Alert.alert('Validation', 'Please enter a member name.');
-  }
+  // const name = newName.trim();
+  // if (!name) {
+  //   return Alert.alert('Validation', 'Please enter a member name.');
+  // }
+
+  const f = firstName.trim();
+  const l = lastName.trim();
+  if (!f) return Alert.alert('Validation', 'Please enter a first name.');
+  if (!l) return Alert.alert('Validation', 'Please enter a last name.');
 
   // 1) create the new member node
   const newRef = push(ref(db, 'members'));
   const memberData = {
-    name,
+    // name,
+    firstName: f,
+    lastName: l,
     church: currentUserChurch,  // stamp in the current user’s church
     Joined: todayKey,
     Teams: {},                  // start with an empty teams map
@@ -447,13 +472,18 @@ const addMember = async () => {
     [newRef.key]: true
   }));
 
-  setNewName('');
+  // setNewName('');
 
-  // 4) Notify the user
-  Alert.alert(
-    'Member Added',
-    `${name} has been added and marked present for today.`
-  );
+  // // 4) Notify the user
+  // Alert.alert(
+  //   'Member Added',
+  //   `${name} has been added and marked present for today.`
+  // );
+
+  // clear the inputs & notify
+  setFirstName('');
+  setLastName('');
+  Alert.alert('Member Added', `${f} ${l} has been added and marked present.`);
 
 };
 
@@ -530,8 +560,8 @@ const confirmRemoveFromTeam = (memberId, teamId, teamName) => {
 // deleteTeam: remove team and remove key from all members
 const deleteTeam = (teamId) => {
   Alert.alert(
-    'Delete team?',
-    'This will remove the team from all members.',
+    'Delete Department/Ministry?',
+    'This will remove the chosen Department/Ministry from all members.',
     [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -678,14 +708,19 @@ const pctPresentFor = (dateKey) => {
   return Math.round((countPresentFor(dateKey) / total) * 100);
 };
  
-  // — Filter & paginate —
-  const filteredMembers = members.filter(m=>
-    m.name.toLowerCase().includes(searchText.trim().toLowerCase())
+// ── Filter & paginate for members ──
+const filteredMembers = members.filter(m => {
+  const q = searchText.trim().toLowerCase();
+  return (
+    m.firstName.toLowerCase().includes(q) ||
+    m.lastName.toLowerCase().includes(q)
   );
-  const totalPages     = Math.max(1, Math.ceil(filteredMembers.length/pageSize));
-  const displayedItems = filteredMembers.slice(
-    (currentPage-1)*pageSize, currentPage*pageSize
-  );
+});
+const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
+const displayedItems = filteredMembers.slice(
+  (currentPage - 1) * pageSize,
+  currentPage * pageSize
+);
 
 // ─── Pagination for Teams ───
 const filteredTeams = teamsList.filter(t =>
@@ -765,11 +800,11 @@ const displayedHistoryItems = filteredDates.slice(
       .filter(Boolean)
       .join(', ');
   
-    const isUsher = currentUserRole === 'usher';
+    // const isUsher = currentUserRole === 'usher';
   
     return (
       <View style={styles.row}>
-        <Text style={styles.member}>{item.name}</Text>
+        <Text style={styles.member}>{item.firstName} {item.lastName}</Text>
   
         <View style={styles.memberActions}>
           {/* only admins can edit */}
@@ -779,15 +814,21 @@ const displayedHistoryItems = filteredDates.slice(
               onPress={() => {
                 setEditingMember(item.id);
                 setEditFields({
-                  name:     item.name,
-                  birthday: item.birthday,
-                  age:      item.age,
-                  address:  item.address,
-                  phone:    item.phone,
-                  email:    item.email,
-                  role:     item.role,
-                  gender:   item.gender,
-                  teams:    teamNames,     // seeded from teamsMap
+                  title:     profileMember.title       || '',
+                  firstName:           item.firstName  || '',
+                  lastName:            item.lastName   || '',
+                  office:    profileMember.office      || '',
+                  birthday:            item.birthday,
+                  age:                 item.age,
+                  address:             item.address,
+                  phone:               item.phone,
+                  email:               item.email,
+                  role:                item.role,
+                  gender:              item.gender,
+                  teams:               teamNames,
+                  bornAgain:           item.bornAgain,
+                  baptisedByImmersion: item.baptisedByImmersion,
+                  receivedHolyGhost:   item.receivedHolyGhost,     // seeded from teamsMap
                 });
               }}
             >
@@ -802,17 +843,6 @@ const displayedHistoryItems = filteredDates.slice(
           >
             <Text style={styles.viewBtnText}>View</Text>
           </TouchableOpacity>
-  
-          {/* only admins can delete */}
-          {!isUsher && (
-            <Ionicons
-              name="trash"
-              size={24}
-              color="#e33"
-              onPress={() => deleteMember(item.id)}
-              style={{ marginLeft: 12 }}
-            />
-          )}
         </View>
       </View>
     );
@@ -964,17 +994,93 @@ const displayedHistoryItems = filteredDates.slice(
   // Save edits back to Firebase
   async function saveEdits() {
     const id = editingMember;
-    await db.ref(`members/${id}/name`).set(editFields.name);
-    await db.ref(`members/${id}/Birthday`).set(editFields.birthday);
-    await db.ref(`members/${id}/Age`).set(editFields.age);
-    await db.ref(`members/${id}/Address`).set(editFields.address);
-    await db.ref(`members/${id}/Phone Number`).set(editFields.phone);
-    await db.ref(`members/${id}/Email`).set(editFields.email);
-    await db.ref(`members/${id}/Role`).set(editFields.role);
-    await db.ref(`members/${id}/Gender`).set(editFields.gender);
-    await db.ref(`members/${id}/Team`).set(editFields.team);
-    setEditingMember(null);
-    setEditFields({});
+    const updates = {
+      Title:           editFields.title     || '',
+      firstName:       editFields.firstName || '',
+      lastName:        editFields.lastName  || '',
+      Birthday:        editFields.birthday  || '',
+      Age:             editFields.age       || '',
+      Address:         editFields.address   || '',
+      'Phone Number':  editFields.phone     || '',
+      Email:           editFields.email     || '',
+      Role:            editFields.role      || '',
+      Gender:          editFields.gender    || '',
+      Office:          editFields.office    || '',
+      BornAgain:       !!editFields.bornAgain,
+      BaptisedByImmersion: !!editFields.baptisedByImmersion,
+      ReceivedHolyGhost:   !!editFields.receivedHolyGhost,
+    };
+  
+    try {
+      // 1) Write to Firebase
+      await db.ref(`members/${id}`).update(updates);
+  
+      // 2) Update local members list
+      setMembers(ms =>
+        ms.map(m =>
+          m.id === id
+            ? {
+                ...m,
+                title:        updates.Title,
+                office:       updates.Office,
+                firstName: updates.firstName,
+                lastName: updates.lastName,
+                name: [updates.firstName, updates.lastName].filter(Boolean).join(' '),
+                birthday: updates.Birthday,
+                age: updates.Age,
+                address: updates.Address,
+                phone: updates['Phone Number'],
+                email: updates.Email,
+                role: updates.Role,
+                gender: updates.Gender,
+                bornAgain: updates.BornAgain,
+                baptisedByImmersion: updates.BaptisedByImmersion,
+                receivedHolyGhost: updates.ReceivedHolyGhost,
+              }
+            : m
+        )
+      );
+  
+      // 3) If that member is currently in the “view” modal, update it too
+      setProfileMember(pm =>
+        pm && pm.id === id
+          ? {
+              ...pm,
+              title:        updates.Title,
+              office:       updates.Office,
+              firstName: updates.firstName,
+              lastName: updates.lastName,
+              name: [updates.firstName, updates.lastName].filter(Boolean).join(' '),
+              birthday: updates.Birthday,
+              age: updates.Age,
+              address: updates.Address,
+              phone: updates['Phone Number'],
+              email: updates.Email,
+              role: updates.Role,
+              gender: updates.Gender,
+              bornAgain: updates.BornAgain,
+              baptisedByImmersion: updates.BaptisedByImmersion,
+              receivedHolyGhost: updates.ReceivedHolyGhost,
+            }
+          : pm
+      );
+  
+      // 4) Close the modal
+        Alert.alert(
+          'Profile Updated',
+          'Member details have been saved successfully.',
+          [
+            {
+              text: 'OK',
+              onPress: () => setEditingMember(null),
+            },
+          ]
+          );
+  
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Save failed', e.message);
+    }
   }
 
   return (
@@ -982,7 +1088,7 @@ const displayedHistoryItems = filteredDates.slice(
       {/* 2×2 Grid */}
       <View style={styles.segmentGrid}>
         {['attendance','members','groups','history'].map(mode => {
-          const label = mode==='groups' ? 'Teams/Groups' : mode.charAt(0).toUpperCase()+mode.slice(1);
+          const label = mode==='groups' ? 'Departments & Ministries' : mode.charAt(0).toUpperCase()+mode.slice(1);
           return (
             <TouchableOpacity key={mode}
               style={[styles.gridBtn, viewMode===mode && styles.gridBtnActive]}
@@ -1007,14 +1113,19 @@ const displayedHistoryItems = filteredDates.slice(
           <Text style={styles.heading}>Add a new member</Text>
           <View style={styles.formRow}>
             <TextInput
-              style={styles.searchInput}
-              placeholder="Member name"
-              placeholderTextColor="#666"
-              value={newName}
-              onChangeText={setNewName}
+            style={[styles.input, { flex: 1 }]}
+            placeholder="First Name"
+            value={firstName}
+            onChangeText={setFirstName}
             />
-            <Text style={[styles.addButton, { marginTop: 8 }]} onPress={addMember}> Add </Text>
-          </View>
+            <TextInput
+            style={[styles.input, { flex: 1, marginLeft: 8 }]}
+            placeholder="Last Name"
+            value={lastName}
+            onChangeText={setLastName}
+            />
+            <Button title="Add" onPress={addMember}/>
+            </View>
           <View style={styles.datePicker}>
             <FlatList
               data={dateList}
@@ -1183,6 +1294,8 @@ const displayedHistoryItems = filteredDates.slice(
 {viewMode === 'members' && (
   <View style={{ flex: 1, padding: 16 }}>
     <Text style={styles.heading}>Registered Members</Text>
+
+    {/* search on firstName OR lastName */}
     <TextInput
       style={styles.search}
       placeholder="Search members…"
@@ -1196,8 +1309,56 @@ const displayedHistoryItems = filteredDates.slice(
 
     <FlatList
       data={displayedItems}
-      keyExtractor={i => i.id}
-      renderItem={renderMemberRow}
+      keyExtractor={item => item.id}
+      renderItem={({ item }) => (
+        <View style={styles.row}>
+          <Text style={styles.member}>
+            {item.firstName} {item.lastName}
+          </Text>
+          <View style={styles.memberActions}>
+            {!isUsher && (
+              <TouchableOpacity
+                style={styles.editBtn}
+                onPress={() => {
+                  setEditingMember(item.id);
+                  setEditFields({
+                    title:               item.title,
+                    office:              item.office,
+                    firstName:           item.firstName,
+                    lastName:            item.lastName,
+                    birthday:            item.birthday,
+                    age:                 item.age,
+                    address:             item.address,
+                    phone:               item.phone,
+                    email:               item.email,
+                    role:                item.role,
+                    gender:              item.gender,
+                    bornAgain:           item.bornAgain,
+                    baptisedByImmersion: item.baptisedByImmersion,
+                    receivedHolyGhost:   item.receivedHolyGhost,
+                  });
+                }}
+              >
+                <Text style={styles.editBtnText}>Edit</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.viewBtn}
+              onPress={() => setProfileMember(item)}
+            >
+              <Text style={styles.viewBtnText}>View</Text>
+            </TouchableOpacity>
+            {!isUsher && (
+            <Ionicons
+            name="trash"
+            size={24}
+            color="#e33"
+            onPress={() => deleteMember(item.id)}
+            />
+            )}
+          </View>
+        </View>
+      )}
       ListEmptyComponent={<Text style={styles.empty}>No members</Text>}
     />
 
@@ -1210,7 +1371,7 @@ const displayedHistoryItems = filteredDates.slice(
           onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
         />
         <Text style={styles.pageInfo}>
-          {currentPage} / {totalPages}
+          Page {currentPage} of {totalPages}
         </Text>
         <Button
           title="Next"
@@ -1230,7 +1391,7 @@ const displayedHistoryItems = filteredDates.slice(
       <View style={{ flexDirection: 'row', marginBottom: 12 }}>
         <TextInput
           style={[styles.input, { flex: 1 }]}
-          placeholder="New team/group name"
+          placeholder="New Department/Ministry"
           placeholderTextColor="#666"
           value={newTeamName}
           onChangeText={setNewTeamName}
@@ -1249,7 +1410,7 @@ const displayedHistoryItems = filteredDates.slice(
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={{ marginBottom: 8 }}>Rename team</Text>
+            <Text style={{ marginBottom: 8 }}>Rename Department/Ministry</Text>
             <TextInput
               style={styles.input}
               value={renamedName}
@@ -1319,7 +1480,7 @@ const displayedHistoryItems = filteredDates.slice(
     {/* ─── Search Bar (everyone) ─── */}
     <TextInput
       style={[styles.input, { marginBottom: 12 }]}
-      placeholder="Search teams…"
+      placeholder="Search..."
       placeholderTextColor="#666"
       value={searchText}
       onChangeText={text => {
@@ -1572,16 +1733,9 @@ const displayedHistoryItems = filteredDates.slice(
   <SafeAreaView style={styles.container}>
     <ScrollView contentContainerStyle={{ padding: 16 }}>
       {profileMember && (() => {
-        // grab current user’s role (from context or prop)
         const isUsher = currentUserRole === 'usher';
-
-        // compute last attended date
         const lastDate = getLastAttendanceDate(profileMember.id);
-        const lastAttended = lastDate
-          ? formatKey(lastDate)
-          : 'Never';
-
-        // compute team names
+        const lastAttended = lastDate ? formatKey(lastDate) : 'Never';
         const teamNames = (teamsMap[profileMember.id] || [])
           .map(id => teamsList.find(t => t.id === id)?.name)
           .filter(Boolean)
@@ -1589,48 +1743,46 @@ const displayedHistoryItems = filteredDates.slice(
 
         return (
           <>
-            <Text style={[styles.heading, { textAlign: 'left' }]}>
-              {profileMember.name}
+            {/* TITLE + NAME */}
+            {profileMember.title ? (
+              <Text style={[styles.heading, { marginBottom: 4 }]}>
+                {profileMember.title}
+              </Text>
+            ) : null}
+            <Text style={[styles.heading, { marginBottom: 16 }]}>
+              {profileMember.firstName || ''}
+              {profileMember.firstName && profileMember.lastName ? ' ' : ''}
+              {profileMember.lastName || profileMember.name}
             </Text>
 
             {/* fields all users see */}
-            <Text style={styles.profileText}>Gender: {profileMember.gender || '–'}</Text>
-            <Text style={styles.profileText}>Age: {profileMember.age || '–'}</Text>
-            <Text style={styles.profileText}>Role: {profileMember.role || '–'}</Text>
-            <Text style={styles.profileText}>Teams: {teamNames}</Text>
-            <Text style={styles.profileText}>Last Attended: {lastAttended}</Text>
+            <Text style={styles.profileText}> Office: {profileMember.office || '–'} </Text>
+            <Text style={styles.profileText}> Age: {profileMember.age || '–'} </Text>
+            <Text style={styles.profileText}> Gender: {profileMember.gender || '–'} </Text>
+            <Text style={styles.profileText}> Birthday: {profileMember.birthday || '–'} </Text>
+            <Text style={styles.profileText}> Department/Ministry: {teamNames} </Text>
+            <Text style={styles.profileText}> Last Attended: {lastAttended} </Text>
 
             {/* only admins see these extra fields */}
             {!isUsher && (
               <>
-                <Text style={styles.profileText}>
-                  Birthday: {profileMember.birthday || '–'}
-                </Text>
-                <Text style={styles.profileText}>
-                  Address: {profileMember.address || '–'}
-                </Text>
-                <Text style={styles.profileText}>
-                  Phone: {profileMember.phone || '–'}
-                </Text>
-                <Text style={styles.profileText}>
-                  Email: {profileMember.email || '–'}
-                </Text>
-                <Text style={styles.profileText}>
-                  Joined: {profileMember.joined ? formatKey(profileMember.joined) : '–'}
-                </Text>
-                <Text style={styles.profileText}>
-                  Attendance Rate: {getPct(profileMember.id, profileMember.joined)}%
-                </Text>
+                <Text style={styles.profileText}> Address: {profileMember.address || '–'} </Text>
+                <Text style={styles.profileText}> Phone: {profileMember.phone || '–'} </Text>
+                <Text style={styles.profileText}> Email: {profileMember.email || '–'} </Text>
+                <Text style={styles.profileText}> Joined: {profileMember.joined ? formatKey(profileMember.joined) : '–'} </Text>
+                <Text style={styles.profileText}> Attendance Rate: {getPct(profileMember.id, profileMember.joined)}% </Text>
+                <Text style={styles.profileText}> Born Again: {profileMember.bornAgain ? 'Yes' : 'No'} </Text>
+                <Text style={styles.profileText}> Baptised by Immersion: {profileMember.baptisedByImmersion ? 'Yes' : 'No'} </Text>
+                <Text style={styles.profileText}> Holy Ghost Baptism: {profileMember.receivedHolyGhost ? 'Yes' : 'No'} </Text>
+                <Text style={styles.profileText}> Member ID: {profileMember.id} </Text>
               </>
             )}
           </>
         );
       })()}
-      <View style={{ marginTop: 20 }}>
-        <Button
-          title="Close"
-          onPress={() => setProfileMember(null)}
-        />
+
+      <View style={{ marginTop: 24 }}>
+        <Button title="Close" onPress={() => setProfileMember(null)} />
       </View>
     </ScrollView>
   </SafeAreaView>
@@ -1644,11 +1796,11 @@ const displayedHistoryItems = filteredDates.slice(
 >
   <View style={styles.modalOverlay}>
     <View style={styles.modalContent}>
-      <Text style={styles.modalTitle}>Rename team</Text>
+      <Text style={styles.modalTitle}>Rename</Text>
 
       <TextInput
         style={styles.input}
-        placeholder="New team name"
+        placeholder="New Department/Ministry name"
         placeholderTextColor="#888"
         value={renameValue}
         onChangeText={setRenameValue}
@@ -1665,7 +1817,7 @@ const displayedHistoryItems = filteredDates.slice(
           onPress={async () => {
             const newName = renameValue.trim();
             if (!newName) {
-              Alert.alert('Validation','Please enter a team name.');
+              Alert.alert('Validation','Please enter a Department/Ministry name.');
               return;
             }
 
@@ -1698,11 +1850,49 @@ const displayedHistoryItems = filteredDates.slice(
 >
   <SafeAreaView style={styles.container}>
     <ScrollView contentContainerStyle={{ padding: 16 }}>
-      <Text style={[styles.heading, { textAlign: 'left' }]}>Edit Profile</Text>
-      {['name','birthday','age','address','phone','email','role','gender'].map(field => (
+      <Text style={[styles.heading, { textAlign: 'left' }]}>
+        Edit Profile
+      </Text>
+
+      {/* Title */}
+      <TextInput
+        style={[styles.input, { marginTop: 8 }]}
+        placeholder="Title (Mr/Mrs/Rev)"
+        placeholderTextColor="#666"
+        value={editFields.title || ''}
+        onChangeText={v => setEditFields(f => ({ ...f, title: v }))}
+      />
+
+      {/* First & Last Name */}
+      <TextInput
+        style={[styles.input, { marginTop: 8 }]}
+        placeholder="First Name"
+        placeholderTextColor="#666"
+        value={editFields.firstName || ''}
+        onChangeText={v => setEditFields(f => ({ ...f, firstName: v }))}
+      />
+      <TextInput
+        style={[styles.input, { marginTop: 8 }]}
+        placeholder="Last Name"
+        placeholderTextColor="#666"
+        value={editFields.lastName || ''}
+        onChangeText={v => setEditFields(f => ({ ...f, lastName: v }))}
+      />
+
+      {/* Office */}
+      <TextInput
+        style={[styles.input, { marginTop: 8 }]}
+        placeholder="Office (Deacon, Elder, etc)"
+        placeholderTextColor="#666"
+        value={editFields.office || ''}
+        onChangeText={v => setEditFields(f => ({ ...f, office: v }))}
+      />
+
+      {/* Other text fields */}
+      {['birthday','age','address','phone','email','role','gender'].map(field => (
         <TextInput
           key={field}
-          style={styles.input}
+          style={[styles.input, { marginTop: 8 }]}
           placeholder={field.charAt(0).toUpperCase() + field.slice(1)}
           placeholderTextColor="#666"
           value={editFields[field] || ''}
@@ -1710,27 +1900,42 @@ const displayedHistoryItems = filteredDates.slice(
         />
       ))}
 
+      {/* Admin‐only boolean switches */}
+      {!isUsher && (
+        <>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Are you born again?</Text>
+            <Switch
+              value={!!editFields.bornAgain}
+              onValueChange={v => setEditFields(f => ({ ...f, bornAgain: v }))}
+            />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Baptised by immersion?</Text>
+            <Switch
+              value={!!editFields.baptisedByImmersion}
+              onValueChange={v => setEditFields(f => ({ ...f, baptisedByImmersion: v }))}
+            />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Received Holy Ghost baptism?</Text>
+            <Switch
+              value={!!editFields.receivedHolyGhost}
+              onValueChange={v => setEditFields(f => ({ ...f, receivedHolyGhost: v }))}
+            />
+          </View>
+        </>
+      )}
+
+      {/* Cancel / Save buttons */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 20 }}>
         <Button
           title="Cancel"
           onPress={() => setEditingMember(null)}
         />
-
         <Button
           title="Save"
-          onPress={() => {
-            saveEdits();
-            Alert.alert(
-              'Profile Updated',
-              'Member details have been saved successfully.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => setEditingMember(null),
-                },
-              ]
-            );
-          }}
+          onPress={saveEdits}
         />
       </View>
     </ScrollView>
@@ -1908,6 +2113,16 @@ historySearch: {
   footerText: {
     fontSize: 12,
     color: '#888',
+  },
+
+  switchRow: {
+    flexDirection: 'row',
+    alignItems:    'center',
+    justifyContent:'space-between',
+    marginTop:     12,
+  },
+  switchLabel: {
+    fontSize: 16,
   },
 
 });
